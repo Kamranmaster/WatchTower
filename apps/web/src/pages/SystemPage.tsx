@@ -1,4 +1,5 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
+import type { SchedulerStatusDto } from '@monitorly/contracts';
 import { ApiError, api } from '../lib/api';
 
 interface ReadyResponse {
@@ -32,6 +33,11 @@ export function SystemPage() {
     queryFn: () => api<{ queues: QueueStats[] }>('/api/dev/queues'),
     refetchInterval: 2000,
   });
+  const scheduler = useQuery({
+    queryKey: ['scheduler'],
+    queryFn: () => api<SchedulerStatusDto>('/api/dev/scheduler'),
+    refetchInterval: 2000,
+  });
   const testJob = useMutation({
     mutationFn: () => api<{ message: { messageId: string } }>('/api/dev/test-fetch-job', { method: 'POST', json: {} }),
     onSuccess: () => void queues.refetch(),
@@ -57,6 +63,17 @@ export function SystemPage() {
               <StatusPill key={name} label={name} up={state === 'up'} />
             ))}
           </ul>
+        )}
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+        <h2 className="mb-4 text-lg font-semibold">Scheduler</h2>
+        {scheduler.isError ? (
+          <p className="text-red-600">{scheduler.error.message}</p>
+        ) : !scheduler.data ? (
+          <p className="text-slate-500">Loading…</p>
+        ) : (
+          <SchedulerPanel data={scheduler.data} />
         )}
       </section>
 
@@ -112,5 +129,55 @@ function StatusPill({ label, up }: { label: string; up: boolean }) {
       <span className="font-medium capitalize">{label}</span>
       <span className="ml-auto text-xs text-slate-500">{up ? 'up' : 'down'}</span>
     </li>
+  );
+}
+
+function SchedulerPanel({ data }: { data: SchedulerStatusDto }) {
+  const live = data.instances.filter((i) => Date.now() - Date.parse(i.lastSeenAt) < 30_000);
+  return (
+    <div className="space-y-4 text-sm">
+      {live.length === 0 ? (
+        <p className="text-amber-700">
+          No scheduler running — start it with <code>npm run dev</code> (or <code>npm run dev:scheduler</code>).
+        </p>
+      ) : (
+        <table className="w-full">
+          <thead className="text-left text-slate-500">
+            <tr>
+              <th className="py-1 font-medium">Instance</th>
+              <th className="py-1 font-medium">Partitions</th>
+              <th className="py-1 font-medium">Last heartbeat</th>
+            </tr>
+          </thead>
+          <tbody>
+            {live.map((i) => (
+              <tr key={i.id} className="border-t border-slate-100">
+                <td className="py-2 font-mono">{i.id}</td>
+                <td className="py-2">{i.partitions} / 64</td>
+                <td className="py-2">{Math.round((Date.now() - Date.parse(i.lastSeenAt)) / 1000)} s ago</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {data.unownedPartitions > 0 && live.length > 0 && (
+        <p className="text-amber-700">{data.unownedPartitions} partitions have no owner right now (rebalancing).</p>
+      )}
+      <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Stat label="Due monitors" value={data.dueMonitors} />
+        <Stat label="Outbox pending" value={data.outbox.pending} warn={data.outbox.pending > 0} />
+        <Stat label="Outbox failed" value={data.outbox.failed} bad={data.outbox.failed > 0} />
+        <Stat label="Runs queued" value={data.checkRuns.queued} />
+      </dl>
+    </div>
+  );
+}
+
+function Stat({ label, value, warn, bad }: { label: string; value: number; warn?: boolean; bad?: boolean }) {
+  return (
+    <div className="rounded-lg bg-slate-50 px-3 py-2">
+      <dt className="text-xs text-slate-500">{label}</dt>
+      <dd className={`text-lg font-semibold ${bad ? 'text-red-600' : warn ? 'text-amber-700' : ''}`}>{value}</dd>
+    </div>
   );
 }

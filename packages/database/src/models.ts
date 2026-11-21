@@ -161,14 +161,20 @@ notificationSchema.index({ eventId: 1 }, { unique: true });
  * Transactional outbox: written in the same transaction as the state change,
  * then published to RabbitMQ by a relay. Prevents "DB updated but message lost".
  */
+export const OUTBOX_STATUSES = ['pending', 'published', 'failed'] as const;
+
 const outboxSchema = new Schema(
   {
     messageId: { type: String, required: true, unique: true },
     exchange: { type: String, required: true },
     routingKey: { type: String, required: true },
     payload: { type: Mixed, required: true },
-    status: { type: String, enum: ['pending', 'published'], default: 'pending' },
+    /** failed = can never be published (unknown route / invalid payload); kept for inspection. */
+    status: { type: String, enum: OUTBOX_STATUSES, default: 'pending' },
     attempts: { type: Number, default: 0 },
+    /** A relay claims a message until this time; also used as the retry backoff. */
+    lockedUntil: Date,
+    lockedBy: String,
     lastError: String,
     publishedAt: Date,
   },
@@ -178,6 +184,36 @@ outboxSchema.index({ status: 1, createdAt: 1 });
 // Clean up published entries after 7 days.
 outboxSchema.index({ publishedAt: 1 }, { expireAfterSeconds: 7 * 24 * 3600 });
 
+// ---------------------------------------------------------------- Scheduler coordination
+/**
+ * One document per partition (0..TOTAL_PARTITIONS-1). A scheduler instance may only schedule
+ * monitors in partitions whose lease it holds; an unrenewed lease expires and can be taken over.
+ */
+const schedulerLeaseSchema = new Schema(
+  {
+    _id: { type: Number, required: true },
+    ownerId: { type: String, default: null },
+    expiresAt: { type: Date, required: true },
+    /** Incremented on every change of owner (fencing token, useful for debugging handovers). */
+    token: { type: Number, default: 0 },
+  },
+  { timestamps: false, versionKey: false },
+);
+
+/** Heartbeat of each running scheduler instance, used to compute each one's fair share of partitions. */
+const schedulerInstanceSchema = new Schema(
+  {
+    _id: { type: String, required: true },
+    hostname: String,
+    pid: Number,
+    startedAt: { type: Date, required: true },
+    lastSeenAt: { type: Date, required: true },
+  },
+  { timestamps: false, versionKey: false },
+);
+// Dead instances disappear on their own (TTL runs about once a minute; queries also filter by lastSeenAt).
+schedulerInstanceSchema.index({ lastSeenAt: 1 }, { expireAfterSeconds: 10 * 60 });
+
 // ---------------------------------------------------------------- Exports
 export const User = mongoose.model('User', userSchema);
 export const Monitor = mongoose.model('Monitor', monitorSchema);
@@ -186,6 +222,8 @@ export const Snapshot = mongoose.model('Snapshot', snapshotSchema);
 export const Event = mongoose.model('Event', eventSchema);
 export const Notification = mongoose.model('Notification', notificationSchema);
 export const OutboxMessage = mongoose.model('OutboxMessage', outboxSchema);
+export const SchedulerLease = mongoose.model('SchedulerLease', schedulerLeaseSchema);
+export const SchedulerInstance = mongoose.model('SchedulerInstance', schedulerInstanceSchema);
 
 export type UserDoc = HydratedDocument<InferSchemaType<typeof userSchema>>;
 export type MonitorDoc = HydratedDocument<InferSchemaType<typeof monitorSchema>>;
@@ -193,3 +231,4 @@ export type CheckRunDoc = HydratedDocument<InferSchemaType<typeof checkRunSchema
 export type SnapshotDoc = HydratedDocument<InferSchemaType<typeof snapshotSchema>>;
 export type EventDoc = HydratedDocument<InferSchemaType<typeof eventSchema>>;
 export type NotificationDoc = HydratedDocument<InferSchemaType<typeof notificationSchema>>;
+export type OutboxMessageDoc = HydratedDocument<InferSchemaType<typeof outboxSchema>>;

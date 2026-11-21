@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
+  CheckRunDto,
   CreateMonitorInput,
   InterpretInstructionInput,
   InterpretInstructionResponse,
@@ -17,6 +18,15 @@ export function useMonitors() {
     queryFn: async () => (await api<{ monitors: MonitorDto[] }>('/api/monitors')).monitors,
     // Keep "next check"/"last checked" fresh once the scheduler runs.
     refetchInterval: 30_000,
+  });
+}
+
+/** Recent check runs; refreshed often so queued → finished shows up without reloading. */
+export function useMonitorRuns(id: string) {
+  return useQuery({
+    queryKey: ['monitors', id, 'runs'],
+    queryFn: async () => (await api<{ runs: CheckRunDto[] }>(`/api/monitors/${id}/runs?limit=10`)).runs,
+    refetchInterval: 10_000,
   });
 }
 

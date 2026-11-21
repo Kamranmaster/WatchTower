@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import { AiError, type AiErrorCode } from '@monitorly/ai';
 import {
   createMonitorSchema,
@@ -13,7 +14,7 @@ import type { AppDeps } from '../app';
 import { currentUserId, requireAuth } from '../middleware/auth';
 import { HttpError } from '../middleware/errors';
 import { aiRateLimit } from '../middleware/security';
-import { serializeMonitor } from '../serializers';
+import { serializeCheckRun, serializeMonitor } from '../serializers';
 
 const MINUTE = 60_000;
 
@@ -134,6 +135,14 @@ export function monitorsRouter(deps: AppDeps): Router {
   router.get('/:id', async (req, res) => {
     const monitor = await findOwned(req, currentUserId(req));
     res.json({ monitor: serializeMonitor(monitor) });
+  });
+
+  /** Most recent check runs for one of the user's monitors. */
+  router.get('/:id/runs', async (req, res) => {
+    const monitor = await findOwned(req, currentUserId(req));
+    const limit = z.coerce.number().int().min(1).max(100).catch(20).parse(req.query.limit);
+    const runs = await CheckRun.find({ monitorId: monitor._id }).sort({ scheduledFor: -1 }).limit(limit);
+    res.json({ runs: runs.map(serializeCheckRun) });
   });
 
   router.patch('/:id', async (req, res) => {

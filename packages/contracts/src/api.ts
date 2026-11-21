@@ -157,6 +157,30 @@ export interface MonitorDto {
   updatedAt: string;
 }
 
+export type CheckRunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'dead';
+
+export interface CheckRunDto {
+  id: string;
+  scheduledFor: string;
+  status: CheckRunStatus;
+  attempts: number;
+  fetchModeUsed: 'http' | 'browser' | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  durationMs: number | null;
+  error: string | null;
+  createdAt: string;
+}
+
+/** Dev-only scheduler overview (GET /api/dev/scheduler). */
+export interface SchedulerStatusDto {
+  instances: { id: string; partitions: number; lastSeenAt: string; startedAt: string }[];
+  unownedPartitions: number;
+  outbox: { pending: number; published: number; failed: number; oldestPendingAt: string | null };
+  checkRuns: { queued: number; running: number; succeeded: number; failed: number; dead: number };
+  dueMonitors: number;
+}
+
 /** Shape of every non-2xx JSON response. */
 export interface ApiErrorBody {
   error: string;

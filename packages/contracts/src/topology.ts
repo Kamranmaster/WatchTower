@@ -33,6 +33,11 @@ export const ROUTES = {
   notifyEmail: route(EXCHANGES.notification, 'notify.email', emailJobSchema),
 } as const;
 
+/** Looks up the route for a stored (exchange, routingKey) pair, e.g. from the outbox. */
+export function findRoute(exchange: string, routingKey: string): Route | undefined {
+  return Object.values(ROUTES).find((r) => r.exchange === exchange && r.routingKey === routingKey);
+}
+
 export interface QueueDef<S extends z.ZodType = z.ZodType> {
   name: string;
   route: Route<S>;

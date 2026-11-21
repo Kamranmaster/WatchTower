@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
+import type { CheckRunDto } from '@monitorly/contracts';
 import { Link, useNavigate, useParams } from 'react-router';
-import { useDeleteMonitor, useMonitor, useSetMonitorPaused } from '../hooks/useMonitors';
+import { useDeleteMonitor, useMonitor, useMonitorRuns, useSetMonitorPaused } from '../hooks/useMonitors';
 import { FETCH_MODE_LABELS, MONITOR_TYPE_LABELS, describeRules, formatInterval, relativeTime } from '../lib/format';
 import { Alert, Button, ButtonLink, Card, Chip, PageLoading, StatusBadge } from '../components/ui';
 
@@ -104,6 +105,8 @@ export function MonitorDetailPage() {
         )}
       </Card>
 
+      <CheckHistory monitorId={monitor.id} />
+
       <Card>
         <h2 className="text-base font-semibold">Recent changes</h2>
         <p className="mt-2 text-sm text-slate-500">
@@ -136,5 +139,45 @@ function RuleRow({ label, items, exclude }: { label: string; items: string[]; ex
         </Chip>
       ))}
     </div>
+  );
+}
+
+const RUN_STATUS: Record<CheckRunDto['status'], { label: string; className: string }> = {
+  queued: { label: 'Waiting for a worker', className: 'bg-slate-100 text-slate-600' },
+  running: { label: 'Checking…', className: 'bg-indigo-50 text-indigo-700' },
+  succeeded: { label: 'Done', className: 'bg-emerald-50 text-emerald-700' },
+  failed: { label: 'Failed', className: 'bg-amber-50 text-amber-800' },
+  dead: { label: 'Gave up', className: 'bg-red-50 text-red-700' },
+};
+
+function CheckHistory({ monitorId }: { monitorId: string }) {
+  const runs = useMonitorRuns(monitorId);
+  return (
+    <Card>
+      <h2 className="text-base font-semibold">Check history</h2>
+      {runs.isPending ? (
+        <p className="mt-2 text-sm text-slate-500">Loading…</p>
+      ) : runs.isError ? (
+        <p className="mt-2 text-sm text-red-600">{runs.error.message}</p>
+      ) : runs.data.length === 0 ? (
+        <p className="mt-2 text-sm text-slate-500">No checks yet. The first one is scheduled for the time shown above.</p>
+      ) : (
+        <ul className="mt-3 divide-y divide-slate-100 text-sm">
+          {runs.data.map((run) => {
+            const status = RUN_STATUS[run.status];
+            return (
+              <li key={run.id} className="flex flex-wrap items-center gap-3 py-2">
+                <span className="w-40 text-slate-700" title={new Date(run.scheduledFor).toLocaleString()}>
+                  {relativeTime(run.scheduledFor)}
+                </span>
+                <span className={`rounded-md px-2 py-0.5 text-xs font-medium ${status.className}`}>{status.label}</span>
+                {run.durationMs != null && <span className="text-slate-500">{(run.durationMs / 1000).toFixed(1)} s</span>}
+                {run.error && <span className="truncate text-red-600">{run.error}</span>}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </Card>
   );
 }

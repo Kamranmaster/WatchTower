@@ -1,5 +1,5 @@
-import type { MonitorDto, UserDto } from '@monitorly/contracts';
-import type { MonitorDoc, UserDoc } from '@monitorly/database';
+import type { CheckRunDto, MonitorDto, UserDto } from '@monitorly/contracts';
+import type { CheckRunDoc, MonitorDoc, UserDoc } from '@monitorly/database';
 
 /**
  * Explicit DB → API mapping. Only listed fields ever leave the server,
@@ -42,5 +42,20 @@ export function serializeMonitor(monitor: MonitorDoc): MonitorDto {
     lastError: monitor.lastError ?? null,
     createdAt: monitor.createdAt.toISOString(),
     updatedAt: monitor.updatedAt.toISOString(),
+  };
+}
+
+export function serializeCheckRun(run: CheckRunDoc): CheckRunDto {
+  return {
+    id: run._id.toString(),
+    scheduledFor: run.scheduledFor.toISOString(),
+    status: run.status,
+    attempts: run.attempts,
+    fetchModeUsed: run.fetchModeUsed ?? null,
+    startedAt: run.startedAt?.toISOString() ?? null,
+    completedAt: run.completedAt?.toISOString() ?? null,
+    durationMs: run.durationMs ?? null,
+    error: run.error ?? null,
+    createdAt: run.createdAt.toISOString(),
   };
 }

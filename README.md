@@ -9,6 +9,7 @@ changes, applies your rules and alerts you in-app and by email.
 ```
 apps/web                 React + Vite + TanStack Query + Tailwind
 services/api             Express REST API (+ Socket.IO from Phase 8)
+services/scheduler       Finds due monitors → CheckRun + outbox (one transaction) → RabbitMQ
 services/fetch-worker    HTTP fetching (consumes fetch.http)
 packages/config          .env loading + Zod validation
 packages/contracts       RabbitMQ topology + message schemas (single source of truth)
@@ -21,7 +22,7 @@ packages/runtime         Graceful shutdown / crash handling for every service
 infrastructure/          Config mounted into infra containers
 ```
 
-Services still to come: `scheduler`, `browser-worker`, `processing-worker`, `ai-worker`, `notification-worker`.
+Services still to come: `browser-worker`, `processing-worker`, `ai-worker`, `notification-worker`.
 
 ## Prerequisites
 
@@ -40,7 +41,7 @@ npm run infra:up            # MongoDB, RabbitMQ, Redis, SeaweedFS (S3), Mailpit
 
 ```bash
 npm run infra:up    # if not already running
-npm run dev         # api + fetch-worker + web, with hot reload
+npm run dev         # api + scheduler + fetch-worker + web, with hot reload
 npm run smoke       # in another terminal: end-to-end Milestone 1 check
 ```
 
@@ -75,6 +76,7 @@ another user's monitor ID returns 404, exactly like a non-existent one.
 | GET | /api/monitors | List my monitors |
 | GET | /api/monitors/:id | Monitor details |
 | PATCH | /api/monitors/:id | Update (only the fields sent) |
+| GET | /api/monitors/:id/runs | Recent check runs (`?limit=`, max 100) |
 | POST | /api/monitors/:id/pause | Pause |
 | POST | /api/monitors/:id/resume | Resume (clears errors, checks immediately) |
 | DELETE | /api/monitors/:id | Delete monitor and its history |
@@ -110,6 +112,31 @@ If no provider is configured, or it is out of quota or fails, the endpoint retur
 (`code: "ai_…"`) and the form lets the user fill in the filters manually. Calls are capped per
 user per hour (`AI_RATE_LIMIT`).
 
+## Scheduler
+
+`services/scheduler` is its own process (never inside the API, so API replicas can't each
+schedule the same monitor). It runs three loops:
+
+1. **Partition leases** (every 5 s). Monitors are hashed into 64 partitions
+   (`partitionFor(monitorId)`). Each instance heartbeats, then holds leases on its fair share
+   (`ceil(64 / live instances)`) in the `schedulerleases` collection. An instance that crashes
+   stops renewing; after `SCHEDULER_LEASE_TTL_MS` (15 s) the others take its partitions over.
+   A graceful shutdown hands them back immediately.
+2. **Scheduling** (every 2 s). For due monitors (`status = active`, `nextCheckAt <= now`) in
+   owned partitions, one MongoDB transaction: advance `nextCheckAt` (only if unchanged since it
+   was read), create a `CheckRun`, and write the fetch job to the outbox.
+3. **Outbox relay**. Claims outbox messages, publishes them, waits for RabbitMQ's publisher
+   confirm, then marks them published. Failures back off and retry; messages that can never be
+   published are marked `failed`. Delivery is at-least-once, so consumers are idempotent.
+
+Duplicate protection doesn't rely on leases alone: `CheckRun` has a unique index on
+`(monitorId, scheduledFor)` where `scheduledFor` is the due time rounded to the minute, so two
+instances (or a retry) can never create two runs for the same slot. A badly late check restarts
+the cadence from now rather than firing a burst of catch-up checks.
+
+Run more instances locally with `npm run dev:scheduler` in extra terminals; the System page
+(`/system`) shows each instance's partitions, the outbox backlog and queued runs.
+
 ## Messaging model
 
 Every work queue `<q>` has retry tiers `<q>.retry.5000|30000|120000` and a dead-letter
@@ -126,7 +153,7 @@ the redeclare (`PRECONDITION_FAILED`): delete the queue in the management UI or 
 - [x] Phase 1 — Foundation: monorepo, Docker infra, shared packages, API ↔ RabbitMQ ↔ worker
 - [x] Phase 2 — Auth + monitor CRUD + dashboard
 - [x] Phase 3 — Natural-language → validated rules (AI: Gemini / OpenAI / Ollama)
-- [ ] Phase 4 — Scheduler + CheckRuns + outbox
+- [x] Phase 4 — Scheduler + CheckRuns + outbox + partition leases
 - [ ] Phase 5 — HTTP / Playwright fetch workers, SSRF protection, snapshots
 - [ ] Phase 6 — Extraction + change detection
 - [ ] Phase 7 — Rules engine + AI enrichment

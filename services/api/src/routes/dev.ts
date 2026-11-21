@@ -1,7 +1,15 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { QUEUES, ROUTES, deadQueueName } from '@monitorly/contracts';
-import { mongoose } from '@monitorly/database';
+import { QUEUES, ROUTES, deadQueueName, type SchedulerStatusDto } from '@monitorly/contracts';
+import {
+  CheckRun,
+  Monitor,
+  OutboxMessage,
+  SchedulerInstance,
+  SchedulerLease,
+  TOTAL_PARTITIONS,
+  mongoose,
+} from '@monitorly/database';
 import { createEnvelope } from '@monitorly/messaging';
 import type { AppDeps } from '../app';
 
@@ -44,6 +52,47 @@ export function devRouter({ bus }: AppDeps): Router {
       })),
     );
     res.json({ queues });
+  });
+
+  /** Scheduler instances and their partitions, outbox backlog and check run counts. */
+  router.get('/scheduler', async (_req, res) => {
+    const now = new Date();
+    const [instances, leases, outbox, oldestPending, runs, dueMonitors] = await Promise.all([
+      SchedulerInstance.find().sort({ startedAt: 1 }).lean(),
+      SchedulerLease.find({ ownerId: { $ne: null }, expiresAt: { $gt: now } }, { ownerId: 1 }).lean(),
+      OutboxMessage.aggregate<{ _id: string; n: number }>([{ $group: { _id: '$status', n: { $sum: 1 } } }]),
+      OutboxMessage.findOne({ status: 'pending' }, { createdAt: 1 }).sort({ createdAt: 1 }).lean(),
+      CheckRun.aggregate<{ _id: string; n: number }>([{ $group: { _id: '$status', n: { $sum: 1 } } }]),
+      Monitor.countDocuments({ status: 'active', nextCheckAt: { $lte: now } }),
+    ]);
+    const count = (rows: { _id: string; n: number }[], key: string) => rows.find((r) => r._id === key)?.n ?? 0;
+    const perOwner = new Map<string, number>();
+    for (const lease of leases) perOwner.set(lease.ownerId!, (perOwner.get(lease.ownerId!) ?? 0) + 1);
+
+    const body: SchedulerStatusDto = {
+      instances: instances.map((i) => ({
+        id: i._id,
+        partitions: perOwner.get(i._id) ?? 0,
+        lastSeenAt: i.lastSeenAt.toISOString(),
+        startedAt: i.startedAt.toISOString(),
+      })),
+      unownedPartitions: TOTAL_PARTITIONS - leases.length,
+      outbox: {
+        pending: count(outbox, 'pending'),
+        published: count(outbox, 'published'),
+        failed: count(outbox, 'failed'),
+        oldestPendingAt: oldestPending?.createdAt.toISOString() ?? null,
+      },
+      checkRuns: {
+        queued: count(runs, 'queued'),
+        running: count(runs, 'running'),
+        succeeded: count(runs, 'succeeded'),
+        failed: count(runs, 'failed'),
+        dead: count(runs, 'dead'),
+      },
+      dueMonitors,
+    };
+    res.json(body);
   });
 
   return router;
