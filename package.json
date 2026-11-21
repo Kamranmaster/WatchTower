@@ -1,0 +1,33 @@
+{
+  "name": "monitorly",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "services/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "infra:up": "docker compose up -d --wait",
+    "infra:down": "docker compose down",
+    "infra:reset": "docker compose down -v",
+    "infra:logs": "docker compose logs -f",
+    "dev": "node scripts/dev.mjs",
+    "dev:api": "npm run dev -w @monitorly/api",
+    "dev:fetch-worker": "npm run dev -w @monitorly/fetch-worker",
+    "dev:web": "npm run dev -w @monitorly/web",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "smoke": "node scripts/smoke-test.mjs",
+    "ai:try": "npm run try -w @monitorly/ai --"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3",
+    "vitest": "^5.1.1"
+  }
+}

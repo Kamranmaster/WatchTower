@@ -1,0 +1,99 @@
+# Local infrastructure for Monitorly.
+# App services (api, workers, web) run on the host with `npm run dev` during development;
+# they get their own containers in Phase 11.
+name: monitorly
+
+services:
+  mongo:
+    image: mongo:7
+    # Single-node replica set: required for multi-document transactions (outbox pattern).
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    ports: ["27017:27017"]
+    volumes: [mongo-data:/data/db]
+    healthcheck:
+      # Initialises the replica set on first boot, then just reports status.
+      test:
+        - CMD
+        - mongosh
+        - --quiet
+        - --eval
+        - "try { rs.status().ok } catch (e) { rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'localhost:27017' }] }).ok }"
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 10s
+    restart: unless-stopped
+
+  rabbitmq:
+    image: rabbitmq:4-management
+    # Fixed hostname: RabbitMQ stores data under its node name, so this keeps the volume valid.
+    hostname: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: monitorly
+      RABBITMQ_DEFAULT_PASS: monitorly
+    ports:
+      - "5672:5672"   # AMQP
+      - "15672:15672" # Management UI
+    volumes: [rabbitmq-data:/var/lib/rabbitmq]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports: ["6379:6379"]
+    volumes: [redis-data:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # S3-compatible object storage for snapshots (stand-in for AWS S3 / Cloudflare R2).
+  seaweedfs:
+    image: chrislusf/seaweedfs:latest
+    command: ["server", "-dir=/data", "-s3", "-s3.port=8333", "-s3.config=/etc/seaweedfs/s3.json"]
+    ports:
+      - "8333:8333" # S3 API
+      - "9333:9333" # Master UI
+    volumes:
+      - seaweedfs-data:/data
+      - ./infrastructure/seaweedfs/s3.json:/etc/seaweedfs/s3.json:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8333/healthz || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  # One-shot job: creates the snapshot bucket, then exits.
+  seaweedfs-init:
+    image: chrislusf/seaweedfs:latest
+    depends_on:
+      seaweedfs:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -c
+      - echo 's3.bucket.create -name monitorly-snapshots' | weed shell -master=seaweedfs:9333
+    restart: "no"
+
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "1025:1025" # SMTP
+      - "8025:8025" # Web inbox
+    restart: unless-stopped
+
+volumes:
+  mongo-data:
+  rabbitmq-data:
+  redis-data:
+  seaweedfs-data:
