@@ -1,8 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router';
+import { useId } from 'react';
+import { Link } from 'react-router';
 import type { NotificationDto } from '@monitorly/contracts';
-import { useLiveUpdates, useMarkAllRead, useMarkRead, useNotifications } from '../hooks/useNotifications';
+import { useLiveUpdates, useMarkAllRead, useNotifications, useOpenNotification } from '../hooks/useNotifications';
+import { usePopover } from '../hooks/usePopover';
 import { relativeTime } from '../lib/format';
+import { useToast } from './Toasts';
+import { ErrorState, ListSkeleton, Time, cx } from './ui';
 
 function BellIcon() {
   return (
@@ -12,135 +15,122 @@ function BellIcon() {
   );
 }
 
-/** Opens the change: marks it read and goes to its monitor. */
-function useOpenNotification() {
-  const navigate = useNavigate();
-  const markRead = useMarkRead();
-  return (n: NotificationDto) => {
-    if (!n.isRead) markRead.mutate(n.id);
-    navigate(`/monitors/${n.monitorId}`);
-  };
+/** One notification row; used in the bell panel and on the notifications page. */
+export function NotificationItem({ n, onOpen }: { n: NotificationDto; onOpen: (n: NotificationDto) => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(n)}
+      className={cx(
+        'flex w-full gap-3 px-4 py-3 text-left hover:bg-slate-50 focus-visible:bg-slate-50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-indigo-600',
+        !n.isRead && 'bg-indigo-50/50',
+      )}
+    >
+      <span aria-hidden="true" className={cx('mt-1.5 h-2 w-2 shrink-0 rounded-full', n.isRead ? 'bg-transparent' : 'bg-indigo-600')} />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm font-medium text-slate-900">
+          {!n.isRead && <span className="sr-only">Unread: </span>}
+          {n.title}
+        </span>
+        <span className="line-clamp-2 block text-sm text-slate-600">{n.message}</span>
+        <span className="mt-0.5 block text-xs text-slate-500">
+          {n.monitorName ?? 'Monitor'} · <Time iso={n.createdAt}>{relativeTime(n.createdAt)}</Time>
+        </span>
+      </span>
+    </button>
+  );
 }
 
 export function NotificationBell() {
-  const [open, setOpen] = useState(false);
-  const panel = useRef<HTMLDivElement>(null);
-  const { data } = useNotifications();
+  const popover = usePopover();
+  const panelId = useId();
+  const latest = useNotifications();
   const markAll = useMarkAllRead();
+  const toast = useToast();
   const openNotification = useOpenNotification();
-  const unread = data?.unreadCount ?? 0;
-
-  useEffect(() => {
-    if (!open) return;
-    const onClick = (e: MouseEvent) => {
-      if (panel.current && !panel.current.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
-    document.addEventListener('mousedown', onClick);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onClick);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [open]);
+  const unread = latest.data?.unreadCount ?? 0;
+  const list = latest.data?.notifications ?? [];
 
   return (
-    <div className="relative" ref={panel}>
+    <div className="relative" ref={popover.container}>
       <button
+        ref={popover.trigger}
         type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="relative rounded-md p-2 text-slate-600 hover:bg-slate-100 hover:text-slate-900"
-        aria-label={unread ? `Notifications (${unread} unread)` : 'Notifications'}
-        aria-expanded={open}
+        onClick={popover.toggle}
+        className="relative grid h-10 w-10 place-items-center rounded-md text-slate-600 hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-2 focus-visible:outline-indigo-600"
+        aria-expanded={popover.open}
+        aria-controls={panelId}
       >
         <BellIcon />
+        <span className="sr-only">{unread ? `Notifications (${unread} unread)` : 'Notifications'}</span>
         {unread > 0 && (
-          <span className="absolute -right-0.5 -top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-red-600 px-1 text-[10px] font-semibold text-white">
+          <span
+            aria-hidden="true"
+            className="absolute right-0.5 top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-red-600 px-1 text-[10px] font-semibold text-white"
+          >
             {unread > 99 ? '99+' : unread}
           </span>
         )}
       </button>
 
-      {open && (
-        <div className="absolute right-0 z-20 mt-2 w-96 max-w-[calc(100vw-2rem)] rounded-lg border border-slate-200 bg-white shadow-lg">
+      {popover.open && (
+        <div
+          id={panelId}
+          className="fixed inset-x-2 top-16 z-30 rounded-lg border border-slate-200 bg-white shadow-lg sm:absolute sm:inset-x-auto sm:right-0 sm:top-auto sm:mt-2 sm:w-96"
+        >
           <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
             <h2 className="text-sm font-semibold">Notifications</h2>
             {unread > 0 && (
-              <button type="button" className="text-xs font-medium text-indigo-600 hover:underline" onClick={() => markAll.mutate()}>
+              <button
+                type="button"
+                className="rounded text-xs font-medium text-indigo-700 hover:underline focus-visible:outline-2 focus-visible:outline-indigo-600 disabled:opacity-50"
+                disabled={markAll.isPending}
+                onClick={() => markAll.mutate(undefined, { onError: (err) => toast.error(err, 'Couldn’t mark them as read') })}
+              >
                 Mark all as read
               </button>
             )}
           </div>
-          {!data || data.notifications.length === 0 ? (
+          {latest.isPending ? (
+            <div className="px-4">
+              <ListSkeleton rows={2} label="notifications" />
+            </div>
+          ) : latest.isError ? (
+            <div className="p-3">
+              <ErrorState compact title="Couldn’t load notifications" error={latest.error} onRetry={() => latest.refetch()} retrying={latest.isFetching} />
+            </div>
+          ) : list.length === 0 ? (
             <p className="px-4 py-6 text-center text-sm text-slate-500">No alerts yet. Matches for your monitors will show up here.</p>
           ) : (
-            <ul className="max-h-96 divide-y divide-slate-100 overflow-y-auto">
-              {data.notifications.map((n) => (
+            <ul className="max-h-[60vh] divide-y divide-slate-100 overflow-y-auto sm:max-h-96">
+              {list.map((n) => (
                 <li key={n.id}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setOpen(false);
-                      openNotification(n);
+                  <NotificationItem
+                    n={n}
+                    onOpen={(item) => {
+                      popover.close(); // also when it's for the page already open
+                      openNotification(item);
                     }}
-                    className={`flex w-full gap-3 px-4 py-3 text-left hover:bg-slate-50 ${n.isRead ? '' : 'bg-indigo-50/40'}`}
-                  >
-                    <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${n.isRead ? 'bg-transparent' : 'bg-indigo-600'}`} />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium text-slate-900">{n.title}</span>
-                      <span className="line-clamp-2 block text-sm text-slate-600">{n.message}</span>
-                      <span className="mt-0.5 block text-xs text-slate-400">
-                        {n.monitorName ?? 'Monitor'} · {relativeTime(n.createdAt)}
-                      </span>
-                    </span>
-                  </button>
+                  />
                 </li>
               ))}
             </ul>
           )}
+          <div className="border-t border-slate-100 px-4 py-2.5 text-center">
+            <Link to="/notifications" className="text-sm font-medium text-indigo-700 hover:underline">
+              View all notifications
+            </Link>
+          </div>
         </div>
       )}
     </div>
   );
 }
 
-const TOAST_MS = 8_000;
-
 /** Live pop-ups for alerts that arrive while the app is open. */
 export function LiveAlerts({ userId }: { userId: string | undefined }) {
-  const [toasts, setToasts] = useState<NotificationDto[]>([]);
+  const toast = useToast();
   const openNotification = useOpenNotification();
-  const dismiss = useCallback((id: string) => setToasts((t) => t.filter((x) => x.id !== id)), []);
-
-  useLiveUpdates(userId, (n) => {
-    setToasts((t) => [n, ...t.filter((x) => x.id !== n.id)].slice(0, 3));
-    setTimeout(() => dismiss(n.id), TOAST_MS);
-  });
-
-  if (toasts.length === 0) return null;
-  return (
-    <div className="fixed bottom-4 right-4 z-30 flex w-80 flex-col gap-2" role="status" aria-live="polite">
-      {toasts.map((n) => (
-        <div key={n.id} className="rounded-lg border border-slate-200 bg-white p-3 shadow-lg">
-          <div className="flex items-start gap-2">
-            <button
-              type="button"
-              className="min-w-0 flex-1 text-left"
-              onClick={() => {
-                dismiss(n.id);
-                openNotification(n);
-              }}
-            >
-              <span className="block text-xs font-medium text-indigo-600">{n.monitorName ?? 'New alert'}</span>
-              <span className="block truncate text-sm font-semibold text-slate-900">{n.title}</span>
-              <span className="line-clamp-2 block text-sm text-slate-600">{n.message}</span>
-            </button>
-            <button type="button" className="text-slate-400 hover:text-slate-600" aria-label="Dismiss" onClick={() => dismiss(n.id)}>
-              ×
-            </button>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
+  useLiveUpdates(userId, (n) => toast.notification(n, () => openNotification(n)));
+  return null;
 }

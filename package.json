@@ -5,7 +5,8 @@
   "workspaces": [
     "apps/*",
     "services/*",
-    "packages/*"
+    "packages/*",
+    "e2e"
   ],
   "engines": {
     "node": ">=22"
@@ -29,7 +30,8 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "smoke": "node scripts/smoke-test.mjs",
-    "ai:try": "npm run try -w @monitorly/ai --"
+    "ai:try": "npm run try -w @monitorly/ai --",
+    "test:e2e": "npm run e2e -w @monitorly/e2e"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

@@ -5,6 +5,7 @@ import { Monitor, Notification, mongoose } from '@monitorly/database';
 import type { AppDeps } from '../app';
 import { currentUserId, requireAuth } from '../middleware/auth';
 import { HttpError } from '../middleware/errors';
+import { cursorFilter, paginate } from '../pagination';
 import { serializeNotification } from '../serializers';
 
 /** Monitor display names for a set of notifications (one query). */
@@ -13,7 +14,10 @@ export async function monitorNames(userId: string, monitorIds: string[]): Promis
   return new Map(monitors.map((m) => [String(m._id), m.name || new URL(m.url).hostname]));
 }
 
-/** The in-app notification list (the bell). Only the owner's notifications, only in-app ones. */
+/**
+ * The in-app notification list (the bell and the notifications page). Only the owner's
+ * notifications, only in-app ones. `?limit`, `?unread=true`, `?cursor` (next page).
+ */
 export function notificationsRouter({ env }: AppDeps): Router {
   const router = Router();
   router.use(requireAuth(env));
@@ -22,17 +26,24 @@ export function notificationsRouter({ env }: AppDeps): Router {
     const userId = currentUserId(req);
     const limit = z.coerce.number().int().min(1).max(100).catch(20).parse(req.query.limit);
     const mine = { userId, inApp: { $ne: false } };
-    const [list, unreadCount] = await Promise.all([
-      Notification.find(req.query.unread === 'true' ? { ...mine, isRead: false } : mine)
+    const filter = {
+      ...mine,
+      ...(req.query.unread === 'true' ? { isRead: false } : {}),
+      ...cursorFilter(req.query.cursor, 'createdAt'),
+    };
+    const [rows, unreadCount] = await Promise.all([
+      Notification.find(filter)
         .sort({ createdAt: -1, _id: -1 })
-        .limit(limit)
+        .limit(limit + 1)
         .lean(),
       Notification.countDocuments({ ...mine, isRead: false }),
     ]);
-    const names = await monitorNames(userId, list.map((n) => String(n.monitorId)));
+    const { page, nextCursor } = paginate(rows, limit, (n) => n.createdAt);
+    const names = await monitorNames(userId, page.map((n) => String(n.monitorId)));
     const body: NotificationListResponse = {
-      notifications: list.map((n) => serializeNotification(n, names.get(String(n.monitorId)) ?? null)),
+      notifications: page.map((n) => serializeNotification(n, names.get(String(n.monitorId)) ?? null)),
       unreadCount,
+      nextCursor,
     };
     res.json(body);
   });

@@ -79,11 +79,27 @@ describe('notifications API', () => {
     const { app, notification } = await setup();
     const mine = await notification();
     const intruder = await signedInAgent(app, 'Intruder');
-    expect((await intruder.agent.get('/api/notifications')).body).toEqual({ notifications: [], unreadCount: 0 });
+    expect((await intruder.agent.get('/api/notifications')).body).toEqual({ notifications: [], unreadCount: 0, nextCursor: null });
     expect((await intruder.agent.post(`/api/notifications/${mine.id}/read`)).status).toBe(404);
     expect((await intruder.agent.post('/api/notifications/not-an-id/read')).status).toBe(404);
     await intruder.agent.post('/api/notifications/read-all');
     expect((await Notification.findById(mine.id).lean())!.isRead).toBe(false);
+  });
+
+  it('pages through the list with a cursor', async () => {
+    const { owner, notification } = await setup();
+    for (let i = 0; i < 7; i++) await notification({ isRead: i < 2 });
+    const first = await owner.agent.get('/api/notifications?limit=3');
+    expect(first.body.notifications.map((x: NotificationDto) => x.title)).toEqual(['New: Job 7', 'New: Job 6', 'New: Job 5']);
+    expect(first.body.unreadCount).toBe(5);
+    const second = await owner.agent.get(`/api/notifications?limit=3&cursor=${first.body.nextCursor}`);
+    expect(second.body.notifications.map((x: NotificationDto) => x.title)).toEqual(['New: Job 4', 'New: Job 3', 'New: Job 2']);
+    const third = await owner.agent.get(`/api/notifications?limit=3&cursor=${second.body.nextCursor}`);
+    expect(third.body.notifications.map((x: NotificationDto) => x.title)).toEqual(['New: Job 1']);
+    expect(third.body.nextCursor).toBeNull();
+    const unread = await owner.agent.get('/api/notifications?unread=true&limit=4');
+    expect(unread.body.notifications).toHaveLength(4);
+    expect((await owner.agent.get(`/api/notifications?unread=true&limit=4&cursor=${unread.body.nextCursor}`)).body.notifications).toHaveLength(1);
   });
 
   it('requires login', async () => {

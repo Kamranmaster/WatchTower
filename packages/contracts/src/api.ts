@@ -37,10 +37,27 @@ export const loginSchema = z.strictObject({
 });
 export type LoginInput = z.input<typeof loginSchema>;
 
+/** Account settings (PATCH /api/auth/me). Email can't be changed here. */
+export const updateProfileSchema = z
+  .strictObject({
+    name: z.string().trim().min(1, 'Name is required').max(100, 'Use at most 100 characters'),
+    /** Account-wide switch: off means no alert emails, whatever each monitor says. */
+    emailNotifications: z.boolean(),
+    /** Pre-selected for new monitors. */
+    defaultCheckIntervalMinutes: z
+      .number()
+      .int()
+      .min(MIN_CHECK_INTERVAL_MINUTES, `Minimum interval is ${MIN_CHECK_INTERVAL_MINUTES} minutes`)
+      .max(MAX_CHECK_INTERVAL_MINUTES, 'Maximum interval is 24 hours'),
+  })
+  .partial()
+  .refine((value) => Object.keys(value).length > 0, 'Nothing to update');
+export type UpdateProfileInput = z.input<typeof updateProfileSchema>;
+
 // ---------------------------------------------------------------- Monitor rules
 /** Trimmed, non-empty, de-duplicated (case-insensitive) list of short phrases. */
 const phraseList = z
-  .array(z.string().trim().min(1).max(100))
+  .array(z.string().trim().min(1).max(100, 'Keep each entry under 100 characters'))
   .max(25, 'At most 25 entries')
   .transform((items) => {
     const seen = new Set<string>();
@@ -92,7 +109,7 @@ export interface InterpretInstructionResponse {
 // ---------------------------------------------------------------- Monitor input
 // Fields are defined without defaults so the PATCH schema never fills in values the user didn't send.
 const monitorFields = {
-  name: z.string().trim().max(120),
+  name: z.string().trim().max(120, 'Use at most 120 characters'),
   url: z.string().trim().min(1, 'Website URL is required').max(2048),
   instruction: z.string().trim().min(5, 'Describe what to monitor (at least 5 characters)').max(2000),
   monitorType: z.enum(MONITOR_TYPES),
@@ -236,6 +253,14 @@ export interface NotificationDto {
 export interface NotificationListResponse {
   notifications: NotificationDto[];
   unreadCount: number;
+  /** Pass as ?cursor= to get the next (older) page; null when there are no more. */
+  nextCursor: string | null;
+}
+
+export interface EventListResponse {
+  events: ChangeEventDto[];
+  /** Pass as ?cursor= to get the next (older) page; null when there are no more. */
+  nextCursor: string | null;
 }
 
 /** Dev-only scheduler overview (GET /api/dev/scheduler). */

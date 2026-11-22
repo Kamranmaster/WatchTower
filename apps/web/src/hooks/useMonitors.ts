@@ -1,7 +1,7 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
-  ChangeEventDto,
   CheckRunDto,
+  EventListResponse,
   CreateMonitorInput,
   InterpretInstructionInput,
   InterpretInstructionResponse,
@@ -23,19 +23,28 @@ export function useMonitors() {
 }
 
 /** Recent check runs; refreshed often so queued → finished shows up without reloading. */
-export function useMonitorRuns(id: string) {
+export function useMonitorRuns(id: string, limit = 10) {
   return useQuery({
-    queryKey: ['monitors', id, 'runs'],
-    queryFn: async () => (await api<{ runs: CheckRunDto[] }>(`/api/monitors/${id}/runs?limit=10`)).runs,
+    queryKey: ['monitors', id, 'runs', limit],
+    queryFn: async () => (await api<{ runs: CheckRunDto[] }>(`/api/monitors/${id}/runs?limit=${limit}`)).runs,
     refetchInterval: 10_000,
+    // "Show more" keeps the current rows on screen while the longer list loads.
+    placeholderData: keepPreviousData,
   });
 }
 
-/** Changes detected on one monitor. */
-export function useMonitorEvents(id: string) {
-  return useQuery({
-    queryKey: ['monitors', id, 'events'],
-    queryFn: async () => (await api<{ events: ChangeEventDto[] }>(`/api/monitors/${id}/events?limit=50`)).events,
+export type EventFilter = 'all' | 'matched';
+
+const eventsUrl = (base: string, filter: EventFilter, limit: number, cursor: string | null) =>
+  `${base}?limit=${limit}${filter === 'matched' ? '&only=matched' : ''}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`;
+
+/** Changes detected on one monitor, newest first, a page at a time ("Load older"). */
+export function useMonitorEvents(id: string, filter: EventFilter = 'all', pageSize = 25) {
+  return useInfiniteQuery({
+    queryKey: ['monitors', id, 'events', filter],
+    queryFn: ({ pageParam }) => api<EventListResponse>(eventsUrl(`/api/monitors/${id}/events`, filter, pageSize, pageParam)),
+    initialPageParam: null as string | null,
+    getNextPageParam: (last) => last.nextCursor,
     refetchInterval: 15_000,
   });
 }
@@ -44,8 +53,7 @@ export function useMonitorEvents(id: string) {
 export function useRecentEvents(limit = 10, onlyMatched = false) {
   return useQuery({
     queryKey: ['events', limit, onlyMatched],
-    queryFn: async () =>
-      (await api<{ events: ChangeEventDto[] }>(`/api/events?limit=${limit}${onlyMatched ? '&only=matched' : ''}`)).events,
+    queryFn: async () => (await api<EventListResponse>(eventsUrl('/api/events', onlyMatched ? 'matched' : 'all', limit, null))).events,
     refetchInterval: 15_000,
   });
 }

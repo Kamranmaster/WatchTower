@@ -6,6 +6,7 @@ import {
   interpretInstructionSchema,
   objectIdString,
   updateMonitorSchema,
+  type EventListResponse,
   type InterpretInstructionResponse,
 } from '@monitorly/contracts';
 import { CheckRun, Event, Monitor, Notification, Snapshot, mongoose, partitionFor } from '@monitorly/database';
@@ -15,6 +16,8 @@ import type { AppDeps } from '../app';
 import { currentUserId, requireAuth } from '../middleware/auth';
 import { HttpError } from '../middleware/errors';
 import { aiRateLimit } from '../middleware/security';
+import { cursorFilter, paginate } from '../pagination';
+import { onlyFilter } from './events';
 import { serializeCheckRun, serializeEvent, serializeMonitor } from '../serializers';
 
 const MINUTE = 60_000;
@@ -146,13 +149,15 @@ export function monitorsRouter(deps: AppDeps): Router {
     res.json({ runs: runs.map(serializeCheckRun) });
   });
 
-  /** Changes detected on this monitor's page, newest first. `?only=matched`: just the alerts. */
+  /** Changes detected on this monitor's page, newest first. `?only=matched`: just the alerts; `?cursor`: next page. */
   router.get('/:id/events', async (req, res) => {
     const monitor = await findOwned(req, currentUserId(req));
     const limit = z.coerce.number().int().min(1).max(200).catch(50).parse(req.query.limit);
-    const filter = req.query.only === 'matched' ? { monitorId: monitor._id, alertedAt: { $exists: true } } : { monitorId: monitor._id };
-    const events = await Event.find(filter).sort({ detectedAt: -1, _id: -1 }).limit(limit);
-    res.json({ events: events.map((e) => serializeEvent(e)) });
+    const filter = { monitorId: monitor._id, ...onlyFilter(req.query.only), ...cursorFilter(req.query.cursor, 'detectedAt') };
+    const rows = await Event.find(filter).sort({ detectedAt: -1, _id: -1 }).limit(limit + 1);
+    const { page, nextCursor } = paginate(rows, limit, (e) => e.detectedAt);
+    const body: EventListResponse = { events: page.map((e) => serializeEvent(e)), nextCursor };
+    res.json(body);
   });
 
   router.patch('/:id', async (req, res) => {

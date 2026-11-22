@@ -1,5 +1,6 @@
-import { useRef, useState, type FormEvent } from 'react';
-import type { CreateMonitorInput, InstructionInterpretation, MonitorDto } from '@monitorly/contracts';
+import { useMemo, useRef, useState, type FormEvent } from 'react';
+import { Link } from 'react-router';
+import { createMonitorSchema, type CreateMonitorInput, type InstructionInterpretation, type MonitorDto } from '@monitorly/contracts/api';
 import {
   CHECK_INTERVAL_OPTIONS,
   FETCH_MODES,
@@ -7,23 +8,31 @@ import {
   type MonitorFetchMode,
   type MonitorType,
 } from '@monitorly/contracts/constants';
+import { useMe } from '../hooks/useAuth';
 import { useInterpretInstruction } from '../hooks/useMonitors';
+import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { ApiError } from '../lib/api';
 import { FETCH_MODE_LABELS, MONITOR_TYPE_LABELS, describeRules, formatInterval, splitList } from '../lib/format';
-import { Alert, Button, Card, Checkbox, SelectField, TextAreaField, TextField } from './ui';
+import { focusFirstInvalid, urlError, validate } from '../lib/validation';
+import { Alert, Button, Card, Checkbox, SelectField, TextAreaField, TextField, UnsavedChangesDialog } from './ui';
+
+export type MonitorFormValues = Required<Omit<CreateMonitorInput, 'name'>> & { name: string };
 
 interface Props {
   initial?: MonitorDto;
   submitLabel: string;
   pending: boolean;
   error: Error | null;
-  onSubmit: (values: Required<Omit<CreateMonitorInput, 'name'>> & { name: string }) => void;
+  /** Resolve when saved (the page navigates away), reject when the save failed. */
+  onSubmit: (values: MonitorFormValues) => Promise<unknown>;
   onCancel?: () => void;
 }
 
 const fieldErrorsOf = (error: Error | null) => (error instanceof ApiError ? error.fieldErrors : {});
+const INSTRUCTION_MAX = 2000;
 
 export function MonitorForm({ initial, submitLabel, pending, error, onSubmit, onCancel }: Props) {
+  const { data: me } = useMe();
   const [url, setUrl] = useState(initial?.url ?? '');
   const [name, setName] = useState(initial?.name ?? '');
   const [instruction, setInstruction] = useState(initial?.instruction ?? '');
@@ -31,7 +40,7 @@ export function MonitorForm({ initial, submitLabel, pending, error, onSubmit, on
   const [keywords, setKeywords] = useState(initial?.rules.keywords.join(', ') ?? '');
   const [locations, setLocations] = useState(initial?.rules.locations.join(', ') ?? '');
   const [excludeKeywords, setExcludeKeywords] = useState(initial?.rules.excludeKeywords.join(', ') ?? '');
-  const [checkIntervalMinutes, setCheckInterval] = useState(initial?.checkIntervalMinutes ?? 30);
+  const [checkIntervalMinutes, setCheckInterval] = useState(initial?.checkIntervalMinutes ?? me?.defaultCheckIntervalMinutes ?? 30);
   const [fetchMode, setFetchMode] = useState<MonitorFetchMode>(initial?.fetchMode ?? 'auto');
   const [notifyInApp, setNotifyInApp] = useState(initial?.notifyInApp ?? true);
   const [notifyEmail, setNotifyEmail] = useState(initial?.notifyEmail ?? false);
@@ -79,37 +88,92 @@ export function MonitorForm({ initial, submitLabel, pending, error, onSubmit, on
       setFiltersTouched(true);
     };
 
-  const fieldErrors = { ...fieldErrorsOf(interpret.error), ...fieldErrorsOf(error) };
-  const formError = error && Object.keys(fieldErrorsOf(error)).length === 0 ? error.message : null;
+  // ---- Validation: the API's own schema runs here first. Errors show once a field was left
+  // (blur) or after a submit attempt; server errors show until that field is edited again.
+  const formRef = useRef<HTMLFormElement>(null);
+  const [attempted, setAttempted] = useState(false);
+  const [blurred, setBlurred] = useState<Set<string>>(new Set());
+  const [editedSinceError, setEditedSinceError] = useState<{ error: unknown; fields: Set<string> }>({ error: null, fields: new Set() });
+  const latestError = error ?? interpret.error;
+  const markEdited = (field: string) =>
+    setEditedSinceError((prev) => ({
+      error: latestError,
+      fields: new Set(prev.error === latestError ? [...prev.fields, field] : [field]),
+    }));
+  const blur = (field: string) => () => setBlurred((prev) => (prev.has(field) ? prev : new Set(prev).add(field)));
 
   // Keep a custom interval (set via the API) selectable when editing.
   const intervalOptions = [...new Set<number>([...CHECK_INTERVAL_OPTIONS, checkIntervalMinutes])].sort((a, b) => a - b);
 
   const rules = { keywords: splitList(keywords), locations: splitList(locations), excludeKeywords: splitList(excludeKeywords) };
 
-  const submit = (e: FormEvent) => {
+  const values: MonitorFormValues = {
+    url: url.trim(),
+    name: name.trim(),
+    instruction: trimmedInstruction,
+    monitorType,
+    rules,
+    checkIntervalMinutes,
+    fetchMode,
+    notifyInApp,
+    notifyEmail,
+    aiReview,
+  };
+  const valuesKey = JSON.stringify(values);
+  const clientErrors = useMemo(() => {
+    const errors = validate(createMonitorSchema, JSON.parse(valuesKey));
+    const bad = urlError(url);
+    if (bad) errors.url = bad;
+    return errors;
+  }, [valuesKey, url]);
+
+  const serverErrors = { ...fieldErrorsOf(interpret.error), ...fieldErrorsOf(error) };
+  const edited = editedSinceError.error === latestError ? editedSinceError.fields : new Set<string>();
+  const fieldError = (field: string) => {
+    if (clientErrors[field] && (attempted || blurred.has(field))) return clientErrors[field];
+    if (serverErrors[field] && !edited.has(field.split('.')[0]!)) return serverErrors[field];
+    return undefined;
+  };
+  const formError = error && Object.keys(fieldErrorsOf(error)).length === 0 ? error.message : null;
+
+  // ---- Unsaved changes: ask before leaving with edits.
+  const initialValues = useRef(valuesKey);
+  const dirty = valuesKey !== initialValues.current;
+  const unsaved = useUnsavedChanges(dirty && !pending);
+
+  const submit = async (e: FormEvent) => {
     e.preventDefault();
-    if (needsReview) {
+    setAttempted(true);
+    // The AI step only needs a usable description and URL; everything else is checked on save.
+    if (needsReview && !clientErrors.instruction && !clientErrors.url) {
       suggestFilters();
       return;
     }
-    onSubmit({
-      url: url.trim(),
-      name: name.trim(),
-      instruction: trimmedInstruction,
-      monitorType,
-      rules,
-      checkIntervalMinutes,
-      fetchMode,
-      notifyInApp,
-      notifyEmail,
-      aiReview,
-    });
+    if (Object.keys(clientErrors).length > 0) {
+      focusFirstInvalid(formRef.current);
+      return;
+    }
+    unsaved.allowNavigation();
+    try {
+      await onSubmit(values);
+    } catch {
+      unsaved.blockNavigation();
+      focusFirstInvalid(formRef.current);
+    }
   };
 
+  // Top-level fields only ("rules", not also "rules.keywords").
+  const invalidCount = attempted ? Object.keys(clientErrors).filter((k) => !k.includes('.')).length : 0;
+
   return (
-    <form onSubmit={submit} className="space-y-6" noValidate>
+    <form ref={formRef} onSubmit={submit} className="space-y-6" noValidate aria-label={submitLabel}>
+      <UnsavedChangesDialog blocker={unsaved.blocker} />
       {formError && <Alert>{formError}</Alert>}
+      {invalidCount > 0 && (
+        <Alert>
+          {invalidCount === 1 ? 'One field needs' : `${invalidCount} fields need`} your attention before this can be saved.
+        </Alert>
+      )}
 
       <Card className="space-y-5">
         <h2 className="text-base font-semibold">Website</h2>
@@ -118,8 +182,13 @@ export function MonitorForm({ initial, submitLabel, pending, error, onSubmit, on
           type="url"
           placeholder="https://careers.example.com/jobs"
           value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          error={fieldErrors.url}
+          onChange={(e) => {
+            setUrl(e.target.value);
+            markEdited('url');
+          }}
+          onBlur={blur('url')}
+          error={fieldError('url')}
+          autoComplete="url"
           hint="The exact page to watch, e.g. the job listings page — not just the homepage."
           required
         />
@@ -127,8 +196,12 @@ export function MonitorForm({ initial, submitLabel, pending, error, onSubmit, on
           label="Name (optional)"
           placeholder="Acme internships"
           value={name}
-          onChange={(e) => setName(e.target.value)}
-          error={fieldErrors.name}
+          onChange={(e) => {
+            setName(e.target.value);
+            markEdited('name');
+          }}
+          onBlur={blur('name')}
+          error={fieldError('name')}
           hint="Defaults to the website’s domain."
         />
       </Card>
@@ -142,9 +215,16 @@ export function MonitorForm({ initial, submitLabel, pending, error, onSubmit, on
           value={instruction}
           onChange={(e) => {
             setInstruction(e.target.value);
+            markEdited('instruction');
             if (interpret.isError) interpret.reset();
           }}
-          error={fieldErrors.instruction}
+          onBlur={blur('instruction')}
+          error={fieldError('instruction')}
+          aside={
+            <span aria-hidden="true" className={`text-xs ${instruction.length > INSTRUCTION_MAX ? 'font-medium text-red-700' : 'text-slate-500'}`}>
+              {instruction.length}/{INSTRUCTION_MAX}
+            </span>
+          }
           hint={!initial && !suggestion ? 'We’ll turn this into filters for you to check before anything is saved.' : undefined}
           required
         />
@@ -214,22 +294,36 @@ export function MonitorForm({ initial, submitLabel, pending, error, onSubmit, on
               label="Must mention"
               placeholder="software engineer, intern"
               value={keywords}
-              onChange={(e) => touched(setKeywords)(e.target.value)}
-              error={fieldErrors.rules}
+              onChange={(e) => {
+                touched(setKeywords)(e.target.value);
+                markEdited('rules');
+              }}
+              onBlur={blur('rules.keywords')}
+              error={fieldError('rules.keywords')}
               hint="All of these"
             />
             <TextField
               label="Locations"
               placeholder="India, Remote"
               value={locations}
-              onChange={(e) => touched(setLocations)(e.target.value)}
+              onChange={(e) => {
+                touched(setLocations)(e.target.value);
+                markEdited('rules');
+              }}
+              onBlur={blur('rules.locations')}
+              error={fieldError('rules.locations')}
               hint="Any one of these"
             />
             <TextField
               label="Ignore if it mentions"
               placeholder="senior, principal"
               value={excludeKeywords}
-              onChange={(e) => touched(setExcludeKeywords)(e.target.value)}
+              onChange={(e) => {
+                touched(setExcludeKeywords)(e.target.value);
+                markEdited('rules');
+              }}
+              onBlur={blur('rules.excludeKeywords')}
+              error={fieldError('rules.excludeKeywords')}
               hint="Any one of these"
             />
           </div>
@@ -246,7 +340,7 @@ export function MonitorForm({ initial, submitLabel, pending, error, onSubmit, on
             label="Check"
             value={checkIntervalMinutes}
             onChange={(e) => setCheckInterval(Number(e.target.value))}
-            error={fieldErrors.checkIntervalMinutes}
+            error={fieldError('checkIntervalMinutes')}
           >
             {intervalOptions.map((m) => (
               <option key={m} value={m}>
@@ -270,7 +364,24 @@ export function MonitorForm({ initial, submitLabel, pending, error, onSubmit, on
         <fieldset className="space-y-3">
           <legend className="mb-2 text-sm font-medium text-slate-800">Notify me by</legend>
           <Checkbox label="In-app notification" checked={notifyInApp} onChange={(e) => setNotifyInApp(e.target.checked)} />
-          <Checkbox label="Email" checked={notifyEmail} onChange={(e) => setNotifyEmail(e.target.checked)} />
+          <Checkbox
+            label="Email"
+            checked={notifyEmail}
+            onChange={(e) => setNotifyEmail(e.target.checked)}
+            description={
+              me?.emailNotifications === false ? (
+                <>
+                  Email alerts are turned off for your whole account, so none are sent. Turn them back on in{' '}
+                  <Link to="/settings" className="font-medium text-indigo-700 underline">
+                    Settings
+                  </Link>
+                  .
+                </>
+              ) : me ? (
+                `Sent to ${me.email}.`
+              ) : undefined
+            }
+          />
         </fieldset>
         <fieldset className="space-y-3">
           <legend className="mb-2 text-sm font-medium text-slate-800">Before alerting me</legend>

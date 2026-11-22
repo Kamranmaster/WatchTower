@@ -181,3 +181,62 @@ describe('rules verdicts', () => {
     expect(res.body.monitor.aiReview).toBe(false);
   });
 });
+
+describe('pagination', () => {
+  async function many(count: number) {
+    const { app, owner, monitorId } = await setup(); // 2 events at 10:00 and 11:00
+    const run = await CheckRun.findOne({ monitorId });
+    const sameTime = new Date('2026-11-22T12:00:00Z'); // ties are broken by id, so nothing is skipped
+    await Event.create(
+      Array.from({ length: count }, (_, i) => ({
+        monitorId,
+        userId: owner.user.id,
+        checkRunId: run!._id,
+        eventType: 'new_item',
+        title: `Role ${i}`,
+        fingerprint: `p${i}`,
+        detectedAt: i % 2 ? sameTime : new Date(sameTime.getTime() + i * 60_000),
+        ...(i % 3 === 0 ? { alertedAt: new Date() } : {}),
+      })),
+    );
+    return { app, owner, monitorId, total: count + 2 };
+  }
+
+  async function walk(agent: Awaited<ReturnType<typeof signedInAgent>>['agent'], path: string) {
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    let pages = 0;
+    do {
+      const res = await agent.get(`${path}${path.includes('?') ? '&' : '?'}limit=4${cursor ? `&cursor=${cursor}` : ''}`);
+      expect(res.status).toBe(200);
+      seen.push(...res.body.events.map((e: { id: string }) => e.id));
+      cursor = res.body.nextCursor;
+      pages++;
+    } while (cursor && pages < 20);
+    return seen;
+  }
+
+  it('pages through a monitor’s changes without gaps or repeats', async () => {
+    const { owner, monitorId, total } = await many(9);
+    const ids = await walk(owner.agent, `/api/monitors/${monitorId}/events`);
+    expect(ids).toHaveLength(total);
+    expect(new Set(ids).size).toBe(total);
+    const all = await owner.agent.get(`/api/monitors/${monitorId}/events?limit=100`);
+    expect(all.body.nextCursor).toBeNull();
+    expect(ids).toEqual(all.body.events.map((e: { id: string }) => e.id));
+  });
+
+  it('pages through all changes and through just the alerts', async () => {
+    const { owner, total } = await many(9);
+    expect(await walk(owner.agent, '/api/events')).toHaveLength(total);
+    expect(await walk(owner.agent, '/api/events?only=matched')).toHaveLength(3); // i = 0, 3, 6
+  });
+
+  it('rejects a malformed cursor', async () => {
+    const { owner, monitorId } = await setup();
+    for (const cursor of ['nonsense', Buffer.from('not-a-date|abc').toString('base64url'), 'x'.repeat(300)]) {
+      const res = await owner.agent.get(`/api/monitors/${monitorId}/events?cursor=${cursor}`);
+      expect(res.status).toBe(400);
+    }
+  });
+});

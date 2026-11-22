@@ -29,6 +29,7 @@ packages/storage         S3-compatible object storage for page snapshots (gzip)
 packages/outbox          Transactional outbox: enqueue in a transaction, relay to RabbitMQ
 packages/logger          Pino structured logging
 packages/runtime         Graceful shutdown / crash handling for every service
+e2e/                     Playwright browser tests of the main user journeys (+ axe accessibility checks)
 infrastructure/          Config mounted into infra containers
 ```
 
@@ -68,7 +69,23 @@ Open http://localhost:5173, create an account and add a monitor. The dev-only Sy
 | MongoDB | mongodb://localhost:27017 | — |
 
 Other commands: `npm run ai:try -- "new SWE intern roles in India, not senior"` (tries the AI prompt against the configured provider; `npm run eval -w @monitorly/ai` runs a set of varied descriptions), `npm test` (needs `infra:up` — uses a separate `monitorly_test` database),
-`npm run typecheck`, `npm run infra:logs`, `npm run infra:down`, `npm run infra:reset` (deletes all local data).
+`npm run test:e2e` (browser tests, see below), `npm run typecheck`, `npm run infra:logs`, `npm run infra:down`, `npm run infra:reset` (deletes all local data).
+
+### Browser (end-to-end) tests
+
+`npm run test:e2e` drives the real app in Chromium: desktop and a phone-sized screen. It covers
+sign-up and login, creating monitors (with and without AI suggestions), form validation, editing
+with the unsaved-changes guard, pause/resume/delete, dashboard search and filters, change and check
+history with paging, live alerts, the bell and notifications page, settings, error/retry/offline
+states, phone layouts, keyboard use, and axe accessibility scans (WCAG 2.2 A/AA, no serious or
+critical issues allowed).
+
+It needs `npm run infra:up` and, the first time, `npx playwright install chromium`. It starts its
+own API (port 4100, AI switched off, database `monitorly_e2e`, wiped at the start of each run) and
+a production build of the web app (port 5180), so it can run next to `npm run dev`. The pipeline
+workers aren't started; a test-only seed server (`e2e/support/seed-server.ts`, 127.0.0.1 only)
+writes the changes and alerts the workers would produce and broadcasts them on RabbitMQ, so live
+pop-ups go through the real API. `npm run e2e:ui -w @monitorly/e2e` opens Playwright's UI mode.
 
 ## API
 
@@ -81,20 +98,25 @@ another user's monitor ID returns 404, exactly like a non-existent one.
 | POST | /api/auth/login | Log in |
 | POST | /api/auth/logout | Log out |
 | GET | /api/auth/me | Current user |
+| PATCH | /api/auth/me | Account settings: `name`, `emailNotifications` (account-wide email switch), `defaultCheckIntervalMinutes` |
 | POST | /api/monitors/interpret | Suggest filters from a description (AI; saves nothing) |
 | POST | /api/monitors | Create monitor |
 | GET | /api/monitors | List my monitors |
 | GET | /api/monitors/:id | Monitor details |
 | PATCH | /api/monitors/:id | Update (only the fields sent) |
 | GET | /api/monitors/:id/runs | Recent check runs (`?limit=`, max 100) |
-| GET | /api/monitors/:id/events | Changes detected on this monitor, with the verdict (`?limit=`, max 200; `?only=matched`) |
-| GET | /api/events | Recent changes across all my monitors (`?limit=`, max 100; `?only=matched`) |
-| GET | /api/notifications | My alerts, newest first, plus `unreadCount` (`?limit=`, `?unread=true`) |
+| GET | /api/monitors/:id/events | Changes detected on this monitor, with the verdict (`?limit=`, max 200; `?only=matched`; `?cursor=`) |
+| GET | /api/events | Recent changes across all my monitors (`?limit=`, max 100; `?only=matched`; `?cursor=`) |
+| GET | /api/notifications | My alerts, newest first, plus `unreadCount` (`?limit=`, `?unread=true`; `?cursor=`) |
 | POST | /api/notifications/:id/read | Mark one alert read |
 | POST | /api/notifications/read-all | Mark all alerts read |
 | POST | /api/monitors/:id/pause | Pause |
 | POST | /api/monitors/:id/resume | Resume (clears errors, checks immediately) |
 | DELETE | /api/monitors/:id | Delete monitor and its history |
+
+Lists of changes and alerts are paged with a cursor: each response has `nextCursor` (pass it as
+`?cursor=` for the next, older page; `null` at the end). Unlike offsets, pages stay correct while
+new items arrive at the top.
 
 Sessions are a signed JWT in an `httpOnly`, `SameSite=Lax` cookie; state-changing requests
 from other origins are rejected (CSRF). Request bodies are validated with the shared Zod
@@ -260,6 +282,28 @@ transaction it queues the follow-ups the monitor's settings ask for:
   string is HTML-escaped, the subject can't carry header line breaks, only http(s) links are
   rendered, and every email links to the monitor's settings to turn email off.
 
+## Web app
+
+- **Dashboard**: stats (active, unread alerts, failing, next check), a "Needs attention" list of
+  failing monitors with a Retry button, recent alerts, and the monitor list with search, status
+  filters and sorting. A first-run guide when there are no monitors yet.
+- **Monitor page**: everything it watches for, the change history (all changes or alerts only,
+  with why each change did or didn't alert, paged), the check history, pause/resume/retry, edit
+  and delete (with a confirmation). Opening an alert jumps to and highlights its change.
+- **Notifications page**: every alert, unread filter, mark all as read, paged.
+- **Settings**: name, the account-wide email switch, the default check frequency for new monitors,
+  and in-app/email per monitor (saved as you click).
+- **Forms** run the API's own Zod schemas in the browser, so messages match the server's. Errors
+  show next to the field, focus moves to the first one, and server-side checks (like a private URL)
+  land on the right field. Leaving a form with unsaved edits asks first.
+- **States**: placeholders while loading, an error with "Try again" when loading fails, a toast
+  when an action fails, an offline banner, clear "not found" pages, and a crash screen instead of a
+  blank page.
+- **Accessibility**: skip link, focus moves to the page heading after navigation, page titles,
+  labelled regions, errors announced to screen readers and linked to their fields, a native
+  `<dialog>` for confirmations, keyboard-closable menus, reduced-motion support.
+- **Phones**: the header collapses into a menu, panels fit the screen, nothing scrolls sideways.
+
 ## Messaging model
 
 Every work queue `<q>` has retry tiers `<q>.retry.5000|30000|120000` and a dead-letter
@@ -281,6 +325,6 @@ the redeclare (`PRECONDITION_FAILED`): delete the queue in the management UI or 
 - [x] Phase 6 — Extraction + change detection
 - [x] Phase 7 — Rules engine + AI enrichment
 - [x] Phase 8 — Notifications (Socket.IO + email)
-- [ ] Phase 9 — Frontend pages
+- [x] Phase 9 — Frontend polish: management UX, settings, history, states, responsive, a11y, e2e tests
 - [ ] Phase 10 — Reliability + tests
 - [ ] Phase 11 — Dockerize + deploy

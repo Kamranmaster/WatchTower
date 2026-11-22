@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { loginSchema, registerSchema } from '@monitorly/contracts';
+import { loginSchema, registerSchema, updateProfileSchema } from '@monitorly/contracts';
 import { User } from '@monitorly/database';
 import type { AppDeps } from '../app';
 import { getDummyHash, hashPassword, verifyPassword } from '../auth/passwords';
@@ -61,6 +61,18 @@ export function authRouter({ env, logger }: AppDeps): Router {
       clearAuthCookie(res, env);
       throw new HttpError(401, 'Please log in to continue');
     }
+    res.json({ user: serializeUser(user) });
+  });
+
+  /** Account settings: display name, the account-wide email switch, the default check interval. */
+  router.patch('/me', requireAuth(env), async (req, res) => {
+    const input = updateProfileSchema.parse(req.body);
+    const user = await User.findByIdAndUpdate(currentUserId(req), { $set: input }, { new: true, runValidators: true });
+    if (!user) {
+      clearAuthCookie(res, env);
+      throw new HttpError(401, 'Please log in to continue');
+    }
+    logger.info({ userId: user.id, fields: Object.keys(input) }, 'Account settings updated');
     res.json({ user: serializeUser(user) });
   });
 

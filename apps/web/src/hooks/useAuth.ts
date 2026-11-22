@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { LoginInput, RegisterInput, UserDto } from '@monitorly/contracts';
+import type { LoginInput, RegisterInput, UpdateProfileInput, UserDto } from '@monitorly/contracts';
 import { ApiError, api } from '../lib/api';
 
 export const ME_KEY = ['me'] as const;
@@ -46,5 +46,14 @@ export function useLogout() {
       qc.clear();
       qc.setQueryData(ME_KEY, null);
     },
+  });
+}
+
+/** Account settings: name, account-wide email alerts, default check interval. */
+export function useUpdateProfile() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: UpdateProfileInput) => (await api<{ user: UserDto }>('/api/auth/me', { method: 'PATCH', json: input })).user,
+    onSuccess: (user) => qc.setQueryData(ME_KEY, user),
   });
 }

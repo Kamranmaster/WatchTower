@@ -100,3 +100,35 @@ describe('CSRF protection', () => {
     expect(res.status).toBe(201);
   });
 });
+
+describe('PATCH /api/auth/me (account settings)', () => {
+  it('updates the name, the email switch and the default interval', async () => {
+    const { agent } = await signedInAgent(app, 'Old Name');
+    const res = await agent
+      .patch('/api/auth/me')
+      .send({ name: '  New Name ', emailNotifications: false, defaultCheckIntervalMinutes: 60 });
+    expect(res.status).toBe(200);
+    expect(res.body.user).toMatchObject({ name: 'New Name', emailNotifications: false, defaultCheckIntervalMinutes: 60 });
+    expect((await agent.get('/api/auth/me')).body.user).toMatchObject({ name: 'New Name', emailNotifications: false });
+  });
+
+  it('changes only what was sent', async () => {
+    const { agent } = await signedInAgent(app, 'Keep Me');
+    const res = await agent.patch('/api/auth/me').send({ defaultCheckIntervalMinutes: 15 });
+    expect(res.body.user).toMatchObject({ name: 'Keep Me', emailNotifications: true, defaultCheckIntervalMinutes: 15 });
+  });
+
+  it('validates input and never lets the email or password be changed here', async () => {
+    const { agent } = await signedInAgent(app);
+    const bad = await agent.patch('/api/auth/me').send({ name: '', defaultCheckIntervalMinutes: 1 });
+    expect(bad.status).toBe(400);
+    expect(bad.body.details.map((d: { path: string }) => d.path).sort()).toEqual(['defaultCheckIntervalMinutes', 'name']);
+    expect((await agent.patch('/api/auth/me').send({ email: 'other@example.com' })).status).toBe(400);
+    expect((await agent.patch('/api/auth/me').send({ passwordHash: 'x' })).status).toBe(400);
+    expect((await agent.patch('/api/auth/me').send({})).status).toBe(400);
+  });
+
+  it('requires login', async () => {
+    await request(app).patch('/api/auth/me').send({ name: 'Nobody' }).expect(401);
+  });
+});

@@ -17,6 +17,11 @@ export function relativeTime(iso: string | null, now = Date.now()): string {
   return rtf.format(Math.round(diff / 60_000), 'minute');
 }
 
+/** When an active monitor's next check runs. Overdue means it's waiting for a worker: "Due now". */
+export function nextCheckText(iso: string, now = Date.now()): string {
+  return Date.parse(iso) <= now ? 'Due now' : relativeTime(iso, now);
+}
+
 export function formatInterval(minutes: number): string {
   if (minutes < 60) return `Every ${minutes} min`;
   if (minutes === 60) return 'Every hour';
