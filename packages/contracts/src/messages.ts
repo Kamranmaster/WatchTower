@@ -71,14 +71,33 @@ export const contentProcessedSchema = z.object({
 });
 export type ContentProcessed = z.infer<typeof contentProcessedSchema>;
 
-/** Processing worker → AI worker: enrich matched events. */
+/** At most this many changes go to the AI in one request (one job). */
+export const AI_BATCH_MAX = 20;
+
+/** Rules engine → AI worker: review changes that passed the monitor's filters (one AI call per job). */
 export const aiAnalyzeJobSchema = z.object({
+  ...envelope,
+  monitorId: objectIdString,
+  userId: objectIdString,
+  checkRunId: objectIdString,
+  eventIds: z.array(objectIdString).min(1).max(AI_BATCH_MAX),
+});
+export type AiAnalyzeJob = z.infer<typeof aiAnalyzeJobSchema>;
+
+/**
+ * Rules engine / AI worker → notifications (Phase 8): this change should be delivered.
+ * Sent at most once per event (Event.alertedAt is set in the same transaction).
+ */
+export const eventMatchedSchema = z.object({
   ...envelope,
   eventId: objectIdString,
   monitorId: objectIdString,
   userId: objectIdString,
+  eventType: z.enum(['new_item', 'item_changed', 'item_removed', 'page_changed']),
+  /** True when the AI reviewed the change and found it relevant; false when only the filters decided. */
+  aiReviewed: z.boolean(),
 });
-export type AiAnalyzeJob = z.infer<typeof aiAnalyzeJobSchema>;
+export type EventMatched = z.infer<typeof eventMatchedSchema>;
 
 /** Notification pipeline → email worker. */
 export const emailJobSchema = z.object({

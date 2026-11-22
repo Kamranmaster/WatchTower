@@ -35,6 +35,7 @@ export function MonitorForm({ initial, submitLabel, pending, error, onSubmit, on
   const [fetchMode, setFetchMode] = useState<MonitorFetchMode>(initial?.fetchMode ?? 'auto');
   const [notifyInApp, setNotifyInApp] = useState(initial?.notifyInApp ?? true);
   const [notifyEmail, setNotifyEmail] = useState(initial?.notifyEmail ?? false);
+  const [aiReview, setAiReview] = useState(initial?.aiReview ?? true);
 
   // ---- AI: description → suggested filters, which the user reviews before saving
   const interpret = useInterpretInstruction();
@@ -102,6 +103,7 @@ export function MonitorForm({ initial, submitLabel, pending, error, onSubmit, on
       fetchMode,
       notifyInApp,
       notifyEmail,
+      aiReview,
     });
   };
 
@@ -269,6 +271,15 @@ export function MonitorForm({ initial, submitLabel, pending, error, onSubmit, on
           <legend className="mb-2 text-sm font-medium text-slate-800">Notify me by</legend>
           <Checkbox label="In-app notification" checked={notifyInApp} onChange={(e) => setNotifyInApp(e.target.checked)} />
           <Checkbox label="Email" checked={notifyEmail} onChange={(e) => setNotifyEmail(e.target.checked)} />
+        </fieldset>
+        <fieldset className="space-y-3">
+          <legend className="mb-2 text-sm font-medium text-slate-800">Before alerting me</legend>
+          <Checkbox
+            label="AI review of matches"
+            description="Before alerting you, AI checks each change that passes your filters against your description and writes a one-line summary. Uses the AI provider’s quota; if AI is unavailable, the filters alone decide."
+            checked={aiReview}
+            onChange={(e) => setAiReview(e.target.checked)}
+          />
         </fieldset>
       </Card>
 

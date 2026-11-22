@@ -45,6 +45,8 @@ const monitorSchema = new Schema(
 
     notifyInApp: { type: Boolean, default: true },
     notifyEmail: { type: Boolean, default: false },
+    /** AI reviews changes that pass the filters (Phase 7). */
+    aiReview: { type: Boolean, default: true },
 
     partitionId: { type: Number, required: true },
     nextCheckAt: { type: Date, required: true },
@@ -133,6 +135,8 @@ snapshotSchema.index({ checkRunId: 1 }, { unique: true });
 
 // ---------------------------------------------------------------- Event
 export const EVENT_TYPES = ['new_item', 'item_changed', 'item_removed', 'page_changed'] as const;
+export const MATCH_STATUSES = ['pending', 'matched', 'filtered_out'] as const;
+export const AI_REVIEW_STATUSES = ['pending', 'done', 'skipped', 'failed'] as const;
 
 const eventSchema = new Schema(
   {
@@ -151,12 +155,32 @@ const eventSchema = new Schema(
     previous: Mixed,
     /** For updates: which parts changed ("title", "location", "price"…). */
     changedFields: [String],
-    ai: {
-      status: { type: String, enum: ['pending', 'done', 'skipped', 'failed'], default: 'skipped' },
-      summary: String,
-      classification: String,
-      relevanceScore: Number,
+    /** Rules engine verdict (Phase 7). pending ⇒ not evaluated yet. */
+    match: {
+      status: { type: String, enum: MATCH_STATUSES, default: 'pending' },
+      /** Why it was filtered out, in words the user sees. */
+      reasons: { type: [String], default: undefined },
+      matchedTerms: { type: [String], default: undefined },
+      evaluatedAt: Date,
     },
+    /**
+     * AI review of a matched change. skipped = never sent (AI off for the monitor, or a removal).
+     * pending = queued for review; done = reviewed; failed = the AI couldn't, the filters decided.
+     */
+    ai: {
+      status: { type: String, enum: AI_REVIEW_STATUSES, default: 'skipped' },
+      relevant: Boolean,
+      relevanceScore: Number,
+      summary: String,
+      reason: String,
+      classification: String,
+      model: String,
+      /** Why the AI didn't decide (limit reached, provider error…). */
+      error: String,
+      analyzedAt: Date,
+    },
+    /** When it was handed to notifications (event.matched). Set once, in the same transaction. */
+    alertedAt: Date,
     /** Stable hash of the item identity. Unique per monitor → re-processing never duplicates alerts. */
     fingerprint: { type: String, required: true },
     detectedAt: { type: Date, required: true },
@@ -166,6 +190,21 @@ const eventSchema = new Schema(
 eventSchema.index({ monitorId: 1, fingerprint: 1 }, { unique: true });
 eventSchema.index({ userId: 1, detectedAt: -1 });
 eventSchema.index({ monitorId: 1, detectedAt: -1 });
+
+// ---------------------------------------------------------------- AiUsage
+/**
+ * Daily AI call counters for budgets: _id is "<scope>:<YYYY-MM-DD>" (scope "global" or "user:<id>").
+ * Old days expire on their own.
+ */
+const aiUsageSchema = new Schema(
+  {
+    _id: { type: String, required: true },
+    count: { type: Number, default: 0 },
+    expiresAt: { type: Date, required: true },
+  },
+  { timestamps: false, versionKey: false },
+);
+aiUsageSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 // ---------------------------------------------------------------- Notification
 const notificationSchema = new Schema(
@@ -256,6 +295,7 @@ export const CheckRun = mongoose.model('CheckRun', checkRunSchema);
 export const Snapshot = mongoose.model('Snapshot', snapshotSchema);
 export const Event = mongoose.model('Event', eventSchema);
 export const Notification = mongoose.model('Notification', notificationSchema);
+export const AiUsage = mongoose.model('AiUsage', aiUsageSchema);
 export const OutboxMessage = mongoose.model('OutboxMessage', outboxSchema);
 export const SchedulerLease = mongoose.model('SchedulerLease', schedulerLeaseSchema);
 export const SchedulerInstance = mongoose.model('SchedulerInstance', schedulerInstanceSchema);

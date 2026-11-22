@@ -105,6 +105,8 @@ const monitorFields = {
   fetchMode: z.enum(FETCH_MODES),
   notifyInApp: z.boolean(),
   notifyEmail: z.boolean(),
+  /** Let the AI review changes that pass the filters (relevance + a one-line summary). */
+  aiReview: z.boolean(),
 };
 
 export const createMonitorSchema = z.strictObject({
@@ -116,6 +118,7 @@ export const createMonitorSchema = z.strictObject({
   fetchMode: monitorFields.fetchMode.default('auto'),
   notifyInApp: monitorFields.notifyInApp.default(true),
   notifyEmail: monitorFields.notifyEmail.default(false),
+  aiReview: monitorFields.aiReview.default(true),
 });
 export type CreateMonitorInput = z.input<typeof createMonitorSchema>;
 
@@ -148,6 +151,7 @@ export interface MonitorDto {
   resolvedFetchMode: 'http' | 'browser' | null;
   notifyInApp: boolean;
   notifyEmail: boolean;
+  aiReview: boolean;
   nextCheckAt: string;
   lastCheckedAt: string | null;
   hasBaseline: boolean;
@@ -180,6 +184,22 @@ export interface CheckRunDto {
 
 export type ChangeEventType = 'new_item' | 'item_changed' | 'item_removed' | 'page_changed';
 
+/**
+ * What the rules engine decided:
+ *  pending      not evaluated yet, or the AI is still reviewing it
+ *  matched      passed the filters (and the AI review, if any): the user is alerted
+ *  filtered_out failed the filters (see matchReasons)
+ *  not_relevant passed the filters but the AI judged it not what the user asked for
+ */
+export type ChangeVerdict = 'pending' | 'matched' | 'filtered_out' | 'not_relevant';
+
+export interface ChangeAiDto {
+  status: 'pending' | 'done' | 'skipped' | 'failed';
+  relevant: boolean | null;
+  summary: string | null;
+  reason: string | null;
+}
+
 export interface ChangeEventDto {
   id: string;
   monitorId: string;
@@ -192,6 +212,11 @@ export interface ChangeEventDto {
   /** For updates: the previous title/fields, to show "was …". */
   previous: { title: string; fields: Record<string, string> } | null;
   fields: Record<string, string>;
+  verdict: ChangeVerdict;
+  matchReasons: string[];
+  matchedTerms: string[];
+  /** Present once the change was sent for AI review. */
+  ai: ChangeAiDto | null;
   detectedAt: string;
 }
 

@@ -146,11 +146,12 @@ export function monitorsRouter(deps: AppDeps): Router {
     res.json({ runs: runs.map(serializeCheckRun) });
   });
 
-  /** Changes detected on this monitor's page, newest first. */
+  /** Changes detected on this monitor's page, newest first. `?only=matched`: just the alerts. */
   router.get('/:id/events', async (req, res) => {
     const monitor = await findOwned(req, currentUserId(req));
     const limit = z.coerce.number().int().min(1).max(200).catch(50).parse(req.query.limit);
-    const events = await Event.find({ monitorId: monitor._id }).sort({ detectedAt: -1, _id: -1 }).limit(limit);
+    const filter = req.query.only === 'matched' ? { monitorId: monitor._id, alertedAt: { $exists: true } } : { monitorId: monitor._id };
+    const events = await Event.find(filter).sort({ detectedAt: -1, _id: -1 }).limit(limit);
     res.json({ events: events.map((e) => serializeEvent(e)) });
   });
 

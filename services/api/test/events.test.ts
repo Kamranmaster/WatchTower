@@ -104,3 +104,80 @@ describe('baseline reset', () => {
     expect(res.body.monitor.hasBaseline).toBe(true);
   });
 });
+
+describe('rules verdicts', () => {
+  async function withVerdicts() {
+    const { owner, monitorId } = await setup();
+    await Event.updateOne(
+      { fingerprint: 'f1' },
+      { $set: { 'match.status': 'filtered_out', 'match.reasons': ['Doesn’t mention “frontend”'], 'match.matchedTerms': ['intern'] } },
+    );
+    await Event.updateOne(
+      { fingerprint: 'f2' },
+      {
+        $set: {
+          'match.status': 'matched',
+          'match.reasons': [],
+          'match.matchedTerms': ['mumbai'],
+          'ai.status': 'done',
+          'ai.relevant': true,
+          'ai.summary': 'Data Analyst moved from Remote to Mumbai.',
+          'ai.reason': 'Mumbai is a wanted location',
+          alertedAt: new Date(),
+        },
+      },
+    );
+    return { owner, monitorId };
+  }
+
+  it('shows the verdict, the reasons and the AI review', async () => {
+    const { owner, monitorId } = await withVerdicts();
+    const [changed, filtered] = (await owner.agent.get(`/api/monitors/${monitorId}/events`)).body.events;
+    expect(changed).toMatchObject({
+      verdict: 'matched',
+      matchedTerms: ['mumbai'],
+      ai: { status: 'done', relevant: true, summary: 'Data Analyst moved from Remote to Mumbai.', reason: 'Mumbai is a wanted location' },
+    });
+    expect(filtered).toMatchObject({ verdict: 'filtered_out', matchReasons: ['Doesn’t mention “frontend”'], ai: null });
+  });
+
+  it('?only=matched lists just the changes the user is alerted about', async () => {
+    const { owner, monitorId } = await withVerdicts();
+    const mine = (await owner.agent.get(`/api/monitors/${monitorId}/events?only=matched`)).body.events;
+    expect(mine.map((e: { title: string }) => e.title)).toEqual(['Data Analyst']);
+    const all = (await owner.agent.get('/api/events?only=matched')).body.events;
+    expect(all.map((e: { title: string }) => e.title)).toEqual(['Data Analyst']);
+  });
+
+  it('reports pending, AI-rejected and unreviewed matches', async () => {
+    const { owner, monitorId } = await setup();
+    await Event.updateOne({ fingerprint: 'f1' }, { $set: { 'match.status': 'matched', 'ai.status': 'pending' } });
+    await Event.updateOne(
+      { fingerprint: 'f2' },
+      { $set: { 'match.status': 'matched', 'ai.status': 'done', 'ai.relevant': false, 'ai.reason': 'Not an internship' } },
+    );
+    const [rejected, pending] = (await owner.agent.get(`/api/monitors/${monitorId}/events`)).body.events;
+    expect(pending.verdict).toBe('pending');
+    expect(rejected).toMatchObject({ verdict: 'not_relevant', ai: { relevant: false, reason: 'Not an internship' } });
+
+    await Event.updateOne(
+      { fingerprint: 'f2' },
+      { $set: { 'ai.status': 'skipped', 'ai.error': 'Daily AI review limit reached; the filters decided' }, $unset: { 'ai.relevant': 1, 'ai.reason': 1 } },
+    );
+    const [unreviewed] = (await owner.agent.get(`/api/monitors/${monitorId}/events`)).body.events;
+    expect(unreviewed).toMatchObject({ verdict: 'matched', ai: { status: 'skipped', reason: 'Daily AI review limit reached; the filters decided' } });
+  });
+
+  it('events from before the rules engine show as pending', async () => {
+    const { owner, monitorId } = await setup();
+    const [first] = (await owner.agent.get(`/api/monitors/${monitorId}/events`)).body.events;
+    expect(first).toMatchObject({ verdict: 'pending', matchReasons: [], ai: null });
+  });
+
+  it('AI review is on by default and can be turned off', async () => {
+    const { owner, monitorId } = await setup();
+    expect((await owner.agent.get(`/api/monitors/${monitorId}`)).body.monitor.aiReview).toBe(true);
+    const res = await owner.agent.patch(`/api/monitors/${monitorId}`).send({ aiReview: false });
+    expect(res.body.monitor.aiReview).toBe(false);
+  });
+});

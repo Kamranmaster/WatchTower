@@ -77,6 +77,7 @@ export function MonitorDetailPage() {
         <Info label="Frequency">{formatInterval(monitor.checkIntervalMinutes)}</Info>
         <Info label="Alerts">
           {[monitor.notifyInApp && 'In-app', monitor.notifyEmail && 'Email'].filter(Boolean).join(' + ') || 'Off'}
+          {monitor.aiReview && <span className="block text-xs font-normal text-slate-500">AI-reviewed</span>}
         </Info>
       </div>
 

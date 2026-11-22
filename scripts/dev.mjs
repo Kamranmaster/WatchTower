@@ -1,4 +1,4 @@
-// Runs api, scheduler, fetch/browser/processing workers and web together with prefixed output.
+// Runs api, scheduler, the fetch/browser/processing/rules/AI workers and web together with prefixed output.
 // Replaces `concurrently`, which looks up "cmd.exe" via PATH and fails when
 // C:\Windows\System32 is missing from PATH. Node's `shell: true` uses %ComSpec% instead.
 import { spawn } from 'node:child_process';
@@ -10,6 +10,8 @@ const SERVICES = [
   { name: 'fetch', color: 32, script: 'dev:fetch-worker' },
   { name: 'browser', color: 33, script: 'dev:browser-worker' },
   { name: 'process', color: 91, script: 'dev:processing-worker' },
+  { name: 'rules', color: 92, script: 'dev:rules-worker' },
+  { name: 'ai', color: 95, script: 'dev:ai-worker' },
   { name: 'web', color: 35, script: 'dev:web' },
 ];
 

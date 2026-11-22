@@ -1,4 +1,4 @@
-import type { ChangeEventDto, CheckRunDto, MonitorDto, UserDto } from '@monitorly/contracts';
+import type { ChangeAiDto, ChangeEventDto, ChangeVerdict, CheckRunDto, MonitorDto, UserDto } from '@monitorly/contracts';
 import type { CheckRunDoc, EventDoc, MonitorDoc, UserDoc } from '@monitorly/database';
 
 /**
@@ -35,6 +35,7 @@ export function serializeMonitor(monitor: MonitorDoc): MonitorDto {
     resolvedFetchMode: monitor.resolvedFetchMode ?? null,
     notifyInApp: monitor.notifyInApp,
     notifyEmail: monitor.notifyEmail,
+    aiReview: monitor.aiReview !== false,
     nextCheckAt: monitor.nextCheckAt.toISOString(),
     lastCheckedAt: monitor.lastCheckedAt?.toISOString() ?? null,
     hasBaseline: Boolean(monitor.lastSnapshotId),
@@ -80,6 +81,30 @@ export function serializeEvent(event: EventDoc, monitorName?: string): ChangeEve
     changedFields: event.changedFields ?? [],
     previous: event.eventType === 'item_changed' && previous ? { title: previous.title ?? '', fields: previous.fields ?? {} } : null,
     fields: (item ?? previous)?.fields ?? {},
+    verdict: verdictOf(event),
+    matchReasons: event.match?.reasons ?? [],
+    matchedTerms: event.match?.matchedTerms ?? [],
+    ai: aiOf(event),
     detectedAt: event.detectedAt.toISOString(),
+  };
+}
+
+function verdictOf(event: EventDoc): ChangeVerdict {
+  const match = event.match?.status ?? 'pending';
+  if (match === 'filtered_out') return 'filtered_out';
+  if (match !== 'matched' || event.ai?.status === 'pending') return 'pending';
+  if (event.ai?.status === 'done' && event.ai.relevant === false) return 'not_relevant';
+  return 'matched';
+}
+
+function aiOf(event: EventDoc): ChangeAiDto | null {
+  const ai = event.ai;
+  if (!ai || (ai.status === 'skipped' && !ai.error)) return null;
+  return {
+    status: ai.status,
+    relevant: ai.relevant ?? null,
+    summary: ai.summary ?? null,
+    // When the AI couldn't decide, say why (limit reached, provider down…).
+    reason: ai.reason ?? ai.error ?? null,
   };
 }

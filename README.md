@@ -13,6 +13,8 @@ services/scheduler       Finds due monitors → CheckRun + outbox (one transacti
 services/fetch-worker    HTTP fetching (consumes fetch.http); "auto" hands JS-only pages to the browser worker
 services/browser-worker  Playwright/Chromium rendering (consumes fetch.browser) behind an SSRF-safe proxy
 services/processing-worker  Extraction + change detection (consumes content.process, publishes content.processed)
+services/rules-worker    Applies each monitor's filters to its changes (consumes rules.evaluate)
+services/ai-worker       AI review of matched changes: relevance + summary (consumes ai.analyze)
 packages/config          .env loading + Zod validation
 packages/contracts       RabbitMQ topology + message schemas (single source of truth)
 packages/database        Mongoose connection, models, indexes
@@ -21,6 +23,7 @@ packages/ai              AI (OpenAI / Gemini / Ollama): description → validate
 packages/url-safety      SSRF protection: URL rules + connect-time DNS check (on save, every fetch, every redirect)
 packages/fetching        Safe HTTP fetch (Axios), content check (Cheerio), robots.txt, shared worker steps
 packages/extraction      Page → normalized items with stable fingerprints; item-level diff
+packages/rules           The rules engine: keywords / locations / excludes, pure functions
 packages/storage         S3-compatible object storage for page snapshots (gzip)
 packages/outbox          Transactional outbox: enqueue in a transaction, relay to RabbitMQ
 packages/logger          Pino structured logging
@@ -28,7 +31,7 @@ packages/runtime         Graceful shutdown / crash handling for every service
 infrastructure/          Config mounted into infra containers
 ```
 
-Services still to come: `ai-worker`, `notification-worker`.
+Services still to come: `notification-worker`.
 
 ## Prerequisites
 
@@ -48,7 +51,7 @@ npm run setup:browser       # downloads Chromium for the browser worker (once)
 
 ```bash
 npm run infra:up    # if not already running
-npm run dev         # api + scheduler + fetch/browser/processing workers + web, with hot reload
+npm run dev         # api + scheduler + all workers + web, with hot reload
 npm run smoke       # in another terminal: end-to-end Milestone 1 check
 ```
 
@@ -84,8 +87,8 @@ another user's monitor ID returns 404, exactly like a non-existent one.
 | GET | /api/monitors/:id | Monitor details |
 | PATCH | /api/monitors/:id | Update (only the fields sent) |
 | GET | /api/monitors/:id/runs | Recent check runs (`?limit=`, max 100) |
-| GET | /api/monitors/:id/events | Changes detected on this monitor (`?limit=`, max 200) |
-| GET | /api/events | Recent changes across all my monitors (`?limit=`, max 100) |
+| GET | /api/monitors/:id/events | Changes detected on this monitor, with the verdict (`?limit=`, max 200; `?only=matched`) |
+| GET | /api/events | Recent changes across all my monitors (`?limit=`, max 100; `?only=matched`) |
 | POST | /api/monitors/:id/pause | Pause |
 | POST | /api/monitors/:id/resume | Resume (clears errors, checks immediately) |
 | DELETE | /api/monitors/:id | Delete monitor and its history |
@@ -199,12 +202,40 @@ The processing worker consumes `fetch.completed` (queue `content.process`):
    after 3 such checks in a row the new layout is accepted quietly.
 6. **Commit** in one transaction: events (unique `(monitorId, fingerprint)`, so duplicates are
    impossible), the snapshot marked processed, the baseline advanced, and `content.processed` in the
-   outbox for the rules engine (queue `rules.evaluate`, Phase 7).
+   outbox for the rules engine (queue `rules.evaluate`).
 
 Ordering: a result older than the current baseline (or scheduled before the URL/page type changed)
 is marked stale and never compared. The transaction re-checks that the baseline is still the one it
 compared against; if another check moved it meanwhile, it starts over. Every snapshot and its
 extracted items stay in object storage (`<checkRunId>.html.gz`, `<checkRunId>.items.json.gz`).
+
+## Rules + AI review
+
+The rules worker consumes `content.processed` (queue `rules.evaluate`) and applies the monitor's
+filters to each change (`packages/rules`): case- and accent-insensitive substring matching, so
+"intern" also matches "Internship"; **all** keywords, **any** location (a job's location field
+when it has one, so "remote" in a description doesn't count), **no** excluded word. No filters =
+everything matches. Updates are judged on the new version, removals on the removed item, page
+changes on the passages that appeared. Each change gets a verdict and, when filtered out, the
+reasons ("Doesn't mention "frontend"").
+
+Matched changes then either go straight to notifications or, when the monitor has **AI review**
+on (the default) and an AI key is set, to the AI worker (queue `ai.analyze`, batches of up to 10
+changes per call). The AI judges each change against the user's own description, writes a
+one-line summary and a reason. Relevant → delivered; not relevant → kept in history as "Not
+relevant". Page text is fenced as untrusted data, and the AI can only answer, never act.
+
+When the AI can't decide, the filters' decision stands and the change is delivered, because a
+missed alert is worse than an unreviewed one. That covers no key, the daily limit
+(`AI_REVIEW_DAILY_LIMIT` per user, `AI_REVIEW_GLOBAL_DAILY_LIMIT` overall), quota used up, a
+bad answer, and a provider that is still down after the retries (5 s → 30 s → 2 min). Calls are
+spaced `AI_MIN_INTERVAL_MS` apart for free tiers.
+
+Delivery: matches go out as `event.matched` (queue `notify.dispatch`, consumed by notifications
+in Phase 8). Each change is evaluated once and delivered at most once: the verdict, `alertedAt`
+and the outgoing message are written in one transaction that only applies while the change is
+still pending, so redeliveries and parallel copies are harmless. Changes of deleted monitors are
+ignored.
 
 ## Messaging model
 
@@ -225,7 +256,7 @@ the redeclare (`PRECONDITION_FAILED`): delete the queue in the management UI or 
 - [x] Phase 4 — Scheduler + CheckRuns + outbox + partition leases
 - [x] Phase 5 — HTTP / Playwright fetch workers, SSRF protection, snapshots
 - [x] Phase 6 — Extraction + change detection
-- [ ] Phase 7 — Rules engine + AI enrichment
+- [x] Phase 7 — Rules engine + AI enrichment
 - [ ] Phase 8 — Notifications (Socket.IO + email)
 - [ ] Phase 9 — Frontend pages
 - [ ] Phase 10 — Reliability + tests

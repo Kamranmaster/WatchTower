@@ -110,13 +110,13 @@ function EmptyState() {
 }
 
 function RecentChangesCard() {
-  const events = useRecentEvents(8);
+  const events = useRecentEvents(8, true);
   if (events.isPending || events.isError) return null;
   return (
     <Card>
-      <h2 className="text-base font-semibold">Recent changes</h2>
+      <h2 className="text-base font-semibold">Recent matches</h2>
       {events.data.length === 0 ? (
-        <p className="mt-2 text-sm text-slate-500">No changes detected yet. New, updated and removed items will show up here.</p>
+        <p className="mt-2 text-sm text-slate-500">Nothing matched your filters yet. Changes that do will show up here; every change, including filtered ones, is on each monitor’s page.</p>
       ) : (
         <div className="mt-2">
           <ChangeList events={events.data} showMonitor />

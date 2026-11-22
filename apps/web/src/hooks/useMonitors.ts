@@ -40,11 +40,12 @@ export function useMonitorEvents(id: string) {
   });
 }
 
-/** Recent changes across all monitors (dashboard). */
-export function useRecentEvents(limit = 10) {
+/** Recent changes across all monitors (dashboard). onlyMatched: just the ones the user is alerted about. */
+export function useRecentEvents(limit = 10, onlyMatched = false) {
   return useQuery({
-    queryKey: ['events', limit],
-    queryFn: async () => (await api<{ events: ChangeEventDto[] }>(`/api/events?limit=${limit}`)).events,
+    queryKey: ['events', limit, onlyMatched],
+    queryFn: async () =>
+      (await api<{ events: ChangeEventDto[] }>(`/api/events?limit=${limit}${onlyMatched ? '&only=matched' : ''}`)).events,
     refetchInterval: 15_000,
   });
 }
