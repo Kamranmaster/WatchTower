@@ -1,5 +1,5 @@
-import type { ChangeAiDto, ChangeEventDto, ChangeVerdict, CheckRunDto, MonitorDto, UserDto } from '@monitorly/contracts';
-import type { CheckRunDoc, EventDoc, MonitorDoc, UserDoc } from '@monitorly/database';
+import type { ChangeAiDto, ChangeEventDto, ChangeVerdict, CheckRunDto, NotificationDto, MonitorDto, UserDto } from '@monitorly/contracts';
+import type { CheckRunDoc, EventDoc, MonitorDoc, NotificationDoc, UserDoc } from '@monitorly/database';
 
 /**
  * Explicit DB → API mapping. Only listed fields ever leave the server,
@@ -106,5 +106,25 @@ function aiOf(event: EventDoc): ChangeAiDto | null {
     summary: ai.summary ?? null,
     // When the AI couldn't decide, say why (limit reached, provider down…).
     reason: ai.reason ?? ai.error ?? null,
+  };
+}
+
+type NotificationLike = Pick<
+  NotificationDoc,
+  '_id' | 'monitorId' | 'eventId' | 'eventType' | 'title' | 'message' | 'sourceUrl' | 'isRead' | 'createdAt'
+>;
+
+export function serializeNotification(n: NotificationLike, monitorName: string | null): NotificationDto {
+  return {
+    id: String(n._id),
+    monitorId: String(n.monitorId),
+    monitorName,
+    eventId: String(n.eventId),
+    eventType: n.eventType ?? null,
+    title: n.title,
+    message: n.message,
+    sourceUrl: n.sourceUrl ?? null,
+    isRead: n.isRead,
+    createdAt: n.createdAt.toISOString(),
   };
 }

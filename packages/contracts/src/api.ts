@@ -220,6 +220,24 @@ export interface ChangeEventDto {
   detectedAt: string;
 }
 
+export interface NotificationDto {
+  id: string;
+  monitorId: string;
+  monitorName: string | null;
+  eventId: string;
+  eventType: ChangeEventType | null;
+  title: string;
+  message: string;
+  sourceUrl: string | null;
+  isRead: boolean;
+  createdAt: string;
+}
+
+export interface NotificationListResponse {
+  notifications: NotificationDto[];
+  unreadCount: number;
+}
+
 /** Dev-only scheduler overview (GET /api/dev/scheduler). */
 export interface SchedulerStatusDto {
   instances: { id: string; partitions: number; lastSeenAt: string; startedAt: string }[];

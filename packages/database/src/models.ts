@@ -137,6 +137,7 @@ snapshotSchema.index({ checkRunId: 1 }, { unique: true });
 export const EVENT_TYPES = ['new_item', 'item_changed', 'item_removed', 'page_changed'] as const;
 export const MATCH_STATUSES = ['pending', 'matched', 'filtered_out'] as const;
 export const AI_REVIEW_STATUSES = ['pending', 'done', 'skipped', 'failed'] as const;
+export const EMAIL_STATUSES = ['not_requested', 'pending', 'sending', 'sent', 'skipped', 'failed'] as const;
 
 const eventSchema = new Schema(
   {
@@ -212,21 +213,33 @@ const notificationSchema = new Schema(
     userId: { type: ObjectId, ref: 'User', required: true },
     eventId: { type: ObjectId, ref: 'Event', required: true },
     monitorId: { type: ObjectId, ref: 'Monitor', required: true },
+    eventType: { type: String, enum: EVENT_TYPES },
     title: { type: String, required: true, maxlength: 200 },
     message: { type: String, required: true, maxlength: 2000 },
     sourceUrl: String,
+    /** Shown in the app (bell + live pop-up). False when the monitor only emails. */
+    inApp: { type: Boolean, default: true },
     isRead: { type: Boolean, default: false },
     readAt: Date,
     email: {
-      status: { type: String, enum: ['not_requested', 'pending', 'sent', 'failed'], default: 'not_requested' },
+      /**
+       * not_requested: email off · pending: queued · sending: being sent (claimed) · sent
+       * skipped: not sent on purpose (turned off meanwhile, hourly limit) · failed: gave up
+       */
+      status: { type: String, enum: EMAIL_STATUSES, default: 'not_requested' },
+      /** When the current send started: a crashed send can be taken over after a while. */
+      sendingAt: Date,
       sentAt: Date,
       providerMessageId: String,
+      error: String,
     },
   },
   { timestamps: true },
 );
-notificationSchema.index({ userId: 1, createdAt: -1 });
-notificationSchema.index({ userId: 1, isRead: 1 });
+notificationSchema.index({ userId: 1, inApp: 1, createdAt: -1 });
+notificationSchema.index({ userId: 1, inApp: 1, isRead: 1 });
+/** Hourly email cap per user. */
+notificationSchema.index({ userId: 1, 'email.sentAt': -1 });
 // One notification per event, however many times the pipeline runs.
 notificationSchema.index({ eventId: 1 }, { unique: true });
 

@@ -1,5 +1,6 @@
 import http from 'node:http';
 import { createAiInterpreter, resolveAiConfig } from '@monitorly/ai';
+import { ROUTES } from '@monitorly/contracts';
 import { connectDatabase, disconnectDatabase } from '@monitorly/database';
 import { createLogger } from '@monitorly/logger';
 import { MessageBus } from '@monitorly/messaging';
@@ -7,6 +8,7 @@ import { runService } from '@monitorly/runtime';
 import { S3ObjectStore } from '@monitorly/storage';
 import { createApp } from './app';
 import { env } from './config';
+import { attachRealtime } from './realtime';
 
 const logger = createLogger('api');
 
@@ -28,6 +30,9 @@ runService(logger, async ({ fail }) => {
 
   const store = S3ObjectStore.fromEnv(env);
   const server = http.createServer(createApp({ env, logger, bus, store, interpreter }));
+  // Live updates: every new in-app notification is pushed to the user's open tabs.
+  const realtime = attachRealtime(server, { env, logger });
+  await bus.subscribe(ROUTES.notificationCreated, (msg) => realtime.pushNotification(msg));
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
     server.listen(env.API_PORT, resolve);
@@ -36,8 +41,9 @@ runService(logger, async ({ fail }) => {
 
   return {
     stop: async () => {
-      // Stop accepting connections, let in-flight requests finish, then close dependencies.
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      // Disconnect live-update sockets and stop accepting connections (in-flight requests
+      // finish), then close dependencies.
+      await realtime.close();
       await bus.close();
       await disconnectDatabase();
     },

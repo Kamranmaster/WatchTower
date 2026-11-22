@@ -16,6 +16,7 @@ import { devRouter } from './routes/dev';
 import { eventsRouter } from './routes/events';
 import { healthRouter } from './routes/health';
 import { monitorsRouter } from './routes/monitors';
+import { notificationsRouter } from './routes/notifications';
 
 export interface AppDeps {
   env: Env;
@@ -59,6 +60,7 @@ export function createApp(deps: AppDeps): Express {
   app.use('/api/auth', authRouter(deps));
   app.use('/api/monitors', monitorsRouter(deps));
   app.use('/api/events', eventsRouter(deps));
+  app.use('/api/notifications', notificationsRouter(deps));
   if (env.NODE_ENV !== 'production') {
     app.use('/api/dev', devRouter(deps));
   }

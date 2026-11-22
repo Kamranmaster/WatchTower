@@ -8,13 +8,14 @@ changes, applies your rules and alerts you in-app and by email.
 
 ```
 apps/web                 React + Vite + TanStack Query + Tailwind
-services/api             Express REST API (+ Socket.IO from Phase 8)
+services/api             Express REST API + Socket.IO live updates
 services/scheduler       Finds due monitors → CheckRun + outbox (one transaction) → RabbitMQ
 services/fetch-worker    HTTP fetching (consumes fetch.http); "auto" hands JS-only pages to the browser worker
 services/browser-worker  Playwright/Chromium rendering (consumes fetch.browser) behind an SSRF-safe proxy
 services/processing-worker  Extraction + change detection (consumes content.process, publishes content.processed)
 services/rules-worker    Applies each monitor's filters to its changes (consumes rules.evaluate)
 services/ai-worker       AI review of matched changes: relevance + summary (consumes ai.analyze)
+services/notification-worker  Alerts: in-app notifications + email (consumes notify.dispatch, notify.email)
 packages/config          .env loading + Zod validation
 packages/contracts       RabbitMQ topology + message schemas (single source of truth)
 packages/database        Mongoose connection, models, indexes
@@ -31,7 +32,6 @@ packages/runtime         Graceful shutdown / crash handling for every service
 infrastructure/          Config mounted into infra containers
 ```
 
-Services still to come: `notification-worker`.
 
 ## Prerequisites
 
@@ -89,6 +89,9 @@ another user's monitor ID returns 404, exactly like a non-existent one.
 | GET | /api/monitors/:id/runs | Recent check runs (`?limit=`, max 100) |
 | GET | /api/monitors/:id/events | Changes detected on this monitor, with the verdict (`?limit=`, max 200; `?only=matched`) |
 | GET | /api/events | Recent changes across all my monitors (`?limit=`, max 100; `?only=matched`) |
+| GET | /api/notifications | My alerts, newest first, plus `unreadCount` (`?limit=`, `?unread=true`) |
+| POST | /api/notifications/:id/read | Mark one alert read |
+| POST | /api/notifications/read-all | Mark all alerts read |
 | POST | /api/monitors/:id/pause | Pause |
 | POST | /api/monitors/:id/resume | Resume (clears errors, checks immediately) |
 | DELETE | /api/monitors/:id | Delete monitor and its history |
@@ -231,11 +234,31 @@ missed alert is worse than an unreviewed one. That covers no key, the daily limi
 bad answer, and a provider that is still down after the retries (5 s → 30 s → 2 min). Calls are
 spaced `AI_MIN_INTERVAL_MS` apart for free tiers.
 
-Delivery: matches go out as `event.matched` (queue `notify.dispatch`, consumed by notifications
-in Phase 8). Each change is evaluated once and delivered at most once: the verdict, `alertedAt`
+Delivery: matches go out as `event.matched` (queue `notify.dispatch`, see Notifications below). Each change is evaluated once and delivered at most once: the verdict, `alertedAt`
 and the outgoing message are written in one transaction that only applies while the change is
 still pending, so redeliveries and parallel copies are harmless. Changes of deleted monitors are
 ignored.
+
+## Notifications
+
+The notification worker consumes `event.matched` (queue `notify.dispatch`) and creates one
+notification per change. A unique index on the event makes redeliveries harmless. In the same
+transaction it queues the follow-ups the monitor's settings ask for:
+
+- **In the app**: `notification.created` is broadcast to every API instance. Each one pushes the
+  notification over Socket.IO to the owner's open tabs (bell badge + a pop-up). The browser
+  refetches the list on every (re)connect, so nothing is lost while it was closed. The socket is
+  authenticated with the session cookie, and only the web app's origin may connect: browsers send
+  cookies on cross-site WebSocket handshakes, so this stops other sites from listening in. Each
+  socket only ever joins its own user's room.
+- **By email** (`notify.email`, when the monitor has email on and the user hasn't turned email off):
+  sent via SMTP (Mailpit locally: http://localhost:8025), or Resend when `RESEND_API_KEY` is set.
+  A send is claimed before it starts, so parallel deliveries send once; a claim left by a crashed
+  worker is taken over after 10 minutes, and Resend also gets the notification id as idempotency
+  key. Temporary failures retry (5 s → 30 s → 2 min); a rejected address fails at once. At most
+  `EMAIL_MAX_PER_HOUR` emails per user per hour; the rest are still in the app. Every page-derived
+  string is HTML-escaped, the subject can't carry header line breaks, only http(s) links are
+  rendered, and every email links to the monitor's settings to turn email off.
 
 ## Messaging model
 
@@ -257,7 +280,7 @@ the redeclare (`PRECONDITION_FAILED`): delete the queue in the management UI or 
 - [x] Phase 5 — HTTP / Playwright fetch workers, SSRF protection, snapshots
 - [x] Phase 6 — Extraction + change detection
 - [x] Phase 7 — Rules engine + AI enrichment
-- [ ] Phase 8 — Notifications (Socket.IO + email)
+- [x] Phase 8 — Notifications (Socket.IO + email)
 - [ ] Phase 9 — Frontend pages
 - [ ] Phase 10 — Reliability + tests
 - [ ] Phase 11 — Dockerize + deploy

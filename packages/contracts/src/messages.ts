@@ -99,6 +99,17 @@ export const eventMatchedSchema = z.object({
 });
 export type EventMatched = z.infer<typeof eventMatchedSchema>;
 
+/**
+ * Notification worker → every API instance: a notification was created, push it to the user's
+ * open browser tabs. A broadcast: not stored when no API is running (the list is loaded on connect).
+ */
+export const notificationCreatedSchema = z.object({
+  ...envelope,
+  notificationId: objectIdString,
+  userId: objectIdString,
+});
+export type NotificationCreated = z.infer<typeof notificationCreatedSchema>;
+
 /** Notification pipeline → email worker. */
 export const emailJobSchema = z.object({
   ...envelope,

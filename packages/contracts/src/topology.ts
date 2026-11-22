@@ -4,6 +4,7 @@ import {
   contentProcessedSchema,
   emailJobSchema,
   eventMatchedSchema,
+  notificationCreatedSchema,
   fetchCompletedSchema,
   fetchJobSchema,
 } from './messages';
@@ -25,10 +26,15 @@ export interface Route<S extends z.ZodType = z.ZodType> {
   exchange: string;
   routingKey: string;
   schema: S;
+  /**
+   * Fire-and-forget fan-out to whoever is listening right now (temporary per-process queues).
+   * No durable queue, so "nobody listening" is normal rather than an unroutable-message error.
+   */
+  broadcast?: boolean;
 }
 
-function route<S extends z.ZodType>(exchange: string, routingKey: string, schema: S): Route<S> {
-  return { exchange, routingKey, schema };
+function route<S extends z.ZodType>(exchange: string, routingKey: string, schema: S, options: { broadcast?: boolean } = {}): Route<S> {
+  return { exchange, routingKey, schema, ...options };
 }
 
 /** Where producers publish. The schema is enforced on publish and on consume. */
@@ -39,6 +45,7 @@ export const ROUTES = {
   contentProcessed: route(EXCHANGES.monitor, 'content.processed', contentProcessedSchema),
   aiAnalyze: route(EXCHANGES.monitor, 'ai.analyze', aiAnalyzeJobSchema),
   eventMatched: route(EXCHANGES.notification, 'event.matched', eventMatchedSchema),
+  notificationCreated: route(EXCHANGES.notification, 'notification.created', notificationCreatedSchema, { broadcast: true }),
   notifyEmail: route(EXCHANGES.notification, 'notify.email', emailJobSchema),
 } as const;
 
@@ -63,7 +70,6 @@ export const QUEUES = {
   contentProcess: queue('content.process', ROUTES.fetchCompleted),
   rulesEvaluate: queue('rules.evaluate', ROUTES.contentProcessed),
   aiAnalyze: queue('ai.analyze', ROUTES.aiAnalyze),
-  /** Consumed by notifications (Phase 8); declared now so matches are kept until then. */
   notifyDispatch: queue('notify.dispatch', ROUTES.eventMatched),
   notifyEmail: queue('notify.email', ROUTES.notifyEmail),
 } as const;

@@ -95,7 +95,11 @@ export class MessageBus {
   async publish<S extends z.ZodType>(route: Route<S>, message: z.input<S>): Promise<z.output<S>> {
     const parsed = route.schema.parse(message);
     const messageId = (parsed as { messageId?: string }).messageId ?? randomUUID();
-    await this.publishRaw(route.exchange, route.routingKey, Buffer.from(JSON.stringify(parsed)), { messageId });
+    await this.publishRaw(route.exchange, route.routingKey, Buffer.from(JSON.stringify(parsed)), {
+      messageId,
+      // Broadcasts may have no listener at all (no API running): that's not an error.
+      ...(route.broadcast ? { mandatory: false, persistent: false } : {}),
+    });
     return parsed;
   }
 
@@ -195,6 +199,35 @@ export class MessageBus {
 
     this.consumers.push({ channel, consumerTag });
     log.info({ prefetch }, 'Consuming');
+  }
+
+  /**
+   * Listens to a broadcast route with a private, temporary queue (deleted when this process
+   * disconnects). Every subscribed process gets every message. Best effort: no retries, and
+   * messages sent while nobody listens are dropped, so use it only for live updates whose
+   * source of truth is stored elsewhere.
+   */
+  async subscribe<S extends z.ZodType>(route: Route<S>, handler: (message: z.output<S>) => Promise<void>): Promise<void> {
+    const log = this.logger.child({ route: route.routingKey });
+    const channel = await this.connection.createChannel();
+    channel.on('error', (err: Error) => log.error({ err }, 'Subscriber channel error'));
+    const { queue } = await channel.assertQueue('', { exclusive: true, autoDelete: true, durable: false });
+    await channel.bindQueue(queue, route.exchange, route.routingKey);
+    const { consumerTag } = await channel.consume(
+      queue,
+      (msg) => {
+        if (!msg) return;
+        const task = (async () => {
+          const payload = route.schema.parse(JSON.parse(msg.content.toString('utf8')));
+          await handler(payload);
+        })().catch((err) => log.warn({ err }, 'Broadcast handler failed'));
+        this.inFlight.add(task);
+        void task.finally(() => this.inFlight.delete(task));
+      },
+      { noAck: true },
+    );
+    this.consumers.push({ channel, consumerTag });
+    log.info('Subscribed');
   }
 
   /** Message/consumer counts for a queue — used by health checks and dev tooling. */

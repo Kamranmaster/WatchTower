@@ -24,6 +24,7 @@
     "dev:processing-worker": "npm run dev -w @monitorly/processing-worker",
     "dev:rules-worker": "npm run dev -w @monitorly/rules-worker",
     "dev:ai-worker": "npm run dev -w @monitorly/ai-worker",
+    "dev:notification-worker": "npm run dev -w @monitorly/notification-worker",
     "dev:web": "npm run dev -w @monitorly/web",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",

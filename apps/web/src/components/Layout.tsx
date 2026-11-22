@@ -1,5 +1,6 @@
 import { NavLink, Outlet, useNavigate } from 'react-router';
 import { useLogout, useMe } from '../hooks/useAuth';
+import { LiveAlerts, NotificationBell } from './Notifications';
 import { Button } from './ui';
 
 const navClass = ({ isActive }: { isActive: boolean }) =>
@@ -32,6 +33,7 @@ export function Layout() {
             )}
           </nav>
           <div className="ml-auto flex items-center gap-3">
+            <NotificationBell />
             <span className="hidden text-sm text-slate-600 sm:inline">{user?.name}</span>
             <Button
               variant="ghost"
@@ -46,6 +48,7 @@ export function Layout() {
       <main className="mx-auto max-w-5xl px-6 py-8">
         <Outlet />
       </main>
+      <LiveAlerts userId={user?.id} />
     </div>
   );
 }

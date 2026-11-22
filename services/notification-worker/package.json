@@ -1,0 +1,23 @@
+{
+  "name": "@monitorly/notification-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --clear-screen=false src/index.ts",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@monitorly/config": "*",
+    "@monitorly/contracts": "*",
+    "@monitorly/database": "*",
+    "@monitorly/logger": "*",
+    "@monitorly/messaging": "*",
+    "@monitorly/outbox": "*",
+    "@monitorly/runtime": "*",
+    "nodemailer": "^10.6.1",
+    "zod": "^4.0.0"
+  }
+}
