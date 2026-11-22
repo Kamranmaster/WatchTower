@@ -15,6 +15,7 @@
     "@monitorly/database": "*",
     "@monitorly/logger": "*",
     "@monitorly/messaging": "*",
+    "@monitorly/outbox": "*",
     "@monitorly/runtime": "*",
     "zod": "^4.0.0"
   }

@@ -1,5 +1,5 @@
-import type { CheckRunDto, MonitorDto, UserDto } from '@monitorly/contracts';
-import type { CheckRunDoc, MonitorDoc, UserDoc } from '@monitorly/database';
+import type { ChangeEventDto, CheckRunDto, MonitorDto, UserDto } from '@monitorly/contracts';
+import type { CheckRunDoc, EventDoc, MonitorDoc, UserDoc } from '@monitorly/database';
 
 /**
  * Explicit DB → API mapping. Only listed fields ever leave the server,
@@ -38,6 +38,8 @@ export function serializeMonitor(monitor: MonitorDoc): MonitorDto {
     nextCheckAt: monitor.nextCheckAt.toISOString(),
     lastCheckedAt: monitor.lastCheckedAt?.toISOString() ?? null,
     hasBaseline: Boolean(monitor.lastSnapshotId),
+    itemCount: monitor.baselineItemCount ?? null,
+    lastChangeAt: monitor.lastChangeAt?.toISOString() ?? null,
     consecutiveFailures: monitor.consecutiveFailures,
     lastError: monitor.lastError ?? null,
     createdAt: monitor.createdAt.toISOString(),
@@ -56,6 +58,28 @@ export function serializeCheckRun(run: CheckRunDoc): CheckRunDto {
     completedAt: run.completedAt?.toISOString() ?? null,
     durationMs: run.durationMs ?? null,
     error: run.error ?? null,
+    outcome: run.outcome ?? null,
+    changeCount: run.changeCount ?? null,
     createdAt: run.createdAt.toISOString(),
+  };
+}
+
+type StoredItem = { title?: string; fields?: Record<string, string> } | undefined;
+
+export function serializeEvent(event: EventDoc, monitorName?: string): ChangeEventDto {
+  const item = event.item as StoredItem;
+  const previous = event.previous as StoredItem;
+  return {
+    id: event._id.toString(),
+    monitorId: event.monitorId.toString(),
+    ...(monitorName ? { monitorName } : {}),
+    eventType: event.eventType,
+    title: event.title,
+    description: event.description ?? null,
+    sourceUrl: event.sourceUrl ?? null,
+    changedFields: event.changedFields ?? [],
+    previous: event.eventType === 'item_changed' && previous ? { title: previous.title ?? '', fields: previous.fields ?? {} } : null,
+    fields: (item ?? previous)?.fields ?? {},
+    detectedAt: event.detectedAt.toISOString(),
   };
 }

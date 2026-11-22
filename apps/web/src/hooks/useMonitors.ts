@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
+  ChangeEventDto,
   CheckRunDto,
   CreateMonitorInput,
   InterpretInstructionInput,
@@ -27,6 +28,24 @@ export function useMonitorRuns(id: string) {
     queryKey: ['monitors', id, 'runs'],
     queryFn: async () => (await api<{ runs: CheckRunDto[] }>(`/api/monitors/${id}/runs?limit=10`)).runs,
     refetchInterval: 10_000,
+  });
+}
+
+/** Changes detected on one monitor. */
+export function useMonitorEvents(id: string) {
+  return useQuery({
+    queryKey: ['monitors', id, 'events'],
+    queryFn: async () => (await api<{ events: ChangeEventDto[] }>(`/api/monitors/${id}/events?limit=50`)).events,
+    refetchInterval: 15_000,
+  });
+}
+
+/** Recent changes across all monitors (dashboard). */
+export function useRecentEvents(limit = 10) {
+  return useQuery({
+    queryKey: ['events', limit],
+    queryFn: async () => (await api<{ events: ChangeEventDto[] }>(`/api/events?limit=${limit}`)).events,
+    refetchInterval: 15_000,
   });
 }
 

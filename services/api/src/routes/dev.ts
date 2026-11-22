@@ -88,6 +88,7 @@ export function devRouter({ bus }: AppDeps): Router {
         running: count(runs, 'running'),
         succeeded: count(runs, 'succeeded'),
         failed: count(runs, 'failed'),
+        skipped: count(runs, 'skipped'),
         dead: count(runs, 'dead'),
       },
       dueMonitors,

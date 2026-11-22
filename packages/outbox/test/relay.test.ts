@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ROUTES, fetchJobSchema, type Route } from '@monitorly/contracts';
 import { OutboxMessage, mongoose } from '@monitorly/database';
-import { createEnvelope } from '@monitorly/messaging';
-import { OutboxRelay, type PublishFn } from '../src/outbox';
+import { randomUUID } from 'node:crypto';
+import { OutboxRelay, enqueueOutbox, type PublishFn } from '../src';
 import { fakeClock, logger, useTestDatabase } from './helpers';
 
 useTestDatabase();
@@ -11,7 +11,8 @@ const id = () => new mongoose.Types.ObjectId().toString();
 
 async function addMessage(overrides: Record<string, unknown> = {}) {
   const payload = {
-    ...createEnvelope(),
+    messageId: randomUUID(),
+    occurredAt: new Date().toISOString(),
     checkRunId: id(),
     monitorId: id(),
     userId: id(),
@@ -111,5 +112,27 @@ describe('OutboxRelay', () => {
     expect(results.reduce((n, r) => n + r.published, 0)).toBe(20);
     const ids = bus.published.map((p) => (p.payload as { messageId: string }).messageId);
     expect(new Set(ids).size).toBe(20);
+  });
+});
+
+describe('enqueueOutbox', () => {
+  it('validates the message and stores it with its route', async () => {
+    const payload = await enqueueOutbox(ROUTES.fetchHttp, {
+      messageId: randomUUID(),
+      occurredAt: new Date().toISOString(),
+      checkRunId: id(),
+      monitorId: id(),
+      userId: id(),
+      url: 'https://careers.example.com/jobs',
+      fetchMode: 'http',
+      scheduledAt: new Date().toISOString(),
+    });
+    const doc = await OutboxMessage.findOne({ messageId: payload.messageId }).lean();
+    expect(doc).toMatchObject({ exchange: ROUTES.fetchHttp.exchange, routingKey: 'fetch.http', status: 'pending' });
+  });
+
+  it('rejects an invalid message before it reaches the outbox', async () => {
+    await expect(enqueueOutbox(ROUTES.fetchHttp, { messageId: 'x' } as never)).rejects.toThrow();
+    expect(await OutboxMessage.countDocuments()).toBe(0);
   });
 });

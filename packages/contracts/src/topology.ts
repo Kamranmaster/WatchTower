@@ -1,5 +1,5 @@
 import type { z } from 'zod';
-import { aiAnalyzeJobSchema, emailJobSchema, fetchCompletedSchema, fetchJobSchema } from './messages';
+import { aiAnalyzeJobSchema, contentProcessedSchema, emailJobSchema, fetchCompletedSchema, fetchJobSchema } from './messages';
 
 /**
  * RabbitMQ topology — the single source of truth for exchange, routing key and queue names.
@@ -29,6 +29,7 @@ export const ROUTES = {
   fetchHttp: route(EXCHANGES.monitor, 'fetch.http', fetchJobSchema),
   fetchBrowser: route(EXCHANGES.monitor, 'fetch.browser', fetchJobSchema),
   fetchCompleted: route(EXCHANGES.monitor, 'fetch.completed', fetchCompletedSchema),
+  contentProcessed: route(EXCHANGES.monitor, 'content.processed', contentProcessedSchema),
   aiAnalyze: route(EXCHANGES.monitor, 'ai.analyze', aiAnalyzeJobSchema),
   notifyEmail: route(EXCHANGES.notification, 'notify.email', emailJobSchema),
 } as const;
@@ -52,6 +53,8 @@ export const QUEUES = {
   fetchHttp: queue('fetch.http', ROUTES.fetchHttp),
   fetchBrowser: queue('fetch.browser', ROUTES.fetchBrowser),
   contentProcess: queue('content.process', ROUTES.fetchCompleted),
+  /** Consumed by the rules engine (Phase 7); declared now so results are kept until then. */
+  rulesEvaluate: queue('rules.evaluate', ROUTES.contentProcessed),
   aiAnalyze: queue('ai.analyze', ROUTES.aiAnalyze),
   notifyEmail: queue('notify.email', ROUTES.notifyEmail),
 } as const;

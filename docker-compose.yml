@@ -73,16 +73,22 @@ services:
       start_period: 10s
     restart: unless-stopped
 
-  # One-shot job: creates the snapshot bucket, then exits.
+  # One-off: creates the snapshot bucket. Run by `npm run infra:up` after the services are healthy
+  # (a profile keeps it out of `up --wait`, which treats any exited container as a failure).
   seaweedfs-init:
     image: chrislusf/seaweedfs:latest
+    profiles: [init]
     depends_on:
       seaweedfs:
         condition: service_healthy
     entrypoint:
       - /bin/sh
       - -c
-      - echo 's3.bucket.create -name monitorly-snapshots' | weed shell -master=seaweedfs:9333
+      # Idempotent: "already exists" on later starts is success, anything else fails.
+      - >-
+        out=$$(echo 's3.bucket.create -name monitorly-snapshots' | weed shell -master=seaweedfs:9333 2>&1);
+        echo "$$out";
+        echo "$$out" | grep -qE 'created bucket|already exists'
     restart: "no"
 
   mailpit:

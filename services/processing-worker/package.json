@@ -1,0 +1,24 @@
+{
+  "name": "@monitorly/processing-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --clear-screen=false src/index.ts",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@monitorly/config": "*",
+    "@monitorly/contracts": "*",
+    "@monitorly/database": "*",
+    "@monitorly/extraction": "*",
+    "@monitorly/logger": "*",
+    "@monitorly/messaging": "*",
+    "@monitorly/outbox": "*",
+    "@monitorly/runtime": "*",
+    "@monitorly/storage": "*",
+    "zod": "^4.0.0"
+  }
+}

@@ -2,7 +2,8 @@ import { findRoute, type Route } from '@monitorly/contracts';
 import { OutboxMessage } from '@monitorly/database';
 import type { Logger } from '@monitorly/logger';
 import { ZodError } from 'zod';
-import type { Clock } from './leases';
+
+export type Clock = () => Date;
 
 /** Publishes one message and resolves once the broker confirms it (MessageBus.publish does this). */
 export type PublishFn = (route: Route, payload: unknown) => Promise<unknown>;

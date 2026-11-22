@@ -1,0 +1,27 @@
+{
+  "name": "@monitorly/browser-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --clear-screen=false src/index.ts",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "install-browser": "playwright install chromium"
+  },
+  "dependencies": {
+    "@monitorly/config": "*",
+    "@monitorly/contracts": "*",
+    "@monitorly/database": "*",
+    "@monitorly/fetching": "*",
+    "@monitorly/logger": "*",
+    "@monitorly/messaging": "*",
+    "@monitorly/outbox": "*",
+    "@monitorly/runtime": "*",
+    "@monitorly/storage": "*",
+    "@monitorly/url-safety": "*",
+    "playwright": "^1.65.1",
+    "zod": "^4.0.0"
+  }
+}

@@ -5,9 +5,8 @@ import { connectDatabase, disconnectDatabase } from '@monitorly/database';
 import { createLogger } from '@monitorly/logger';
 import { MessageBus } from '@monitorly/messaging';
 import { runService } from '@monitorly/runtime';
+import { OutboxRelay, startLoop } from '@monitorly/outbox';
 import { PartitionLeaseManager } from './leases';
-import { startLoop } from './loop';
-import { OutboxRelay } from './outbox';
 import { scheduleDueMonitors } from './schedule';
 
 const env = loadEnv(

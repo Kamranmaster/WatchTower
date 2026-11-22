@@ -4,6 +4,7 @@ import { afterAll, beforeAll, beforeEach } from 'vitest';
 import { connectDatabase, disconnectDatabase, mongoose, syncAllIndexes } from '@monitorly/database';
 import { createSilentLogger } from '@monitorly/logger';
 import type { MessageBus } from '@monitorly/messaging';
+import { MemoryObjectStore } from '@monitorly/storage';
 import { createApp, type AppDeps } from '../src/app';
 import { apiEnvSchema } from '../src/env';
 
@@ -21,6 +22,9 @@ export const testEnv = apiEnvSchema.parse({
   MAX_MONITORS_PER_USER: '3',
   AI_RATE_LIMIT: '5',
   AI_API_KEY: '', // tests never call a real AI provider
+  S3_BUCKET: 'unused-in-tests',
+  S3_ACCESS_KEY_ID: 'x',
+  S3_SECRET_ACCESS_KEY: 'x',
   WEB_ORIGIN: 'http://localhost:5173',
 });
 
@@ -36,6 +40,7 @@ export function buildApp(overrides: Partial<AppDeps> = {}): Express {
     env: testEnv,
     logger: createSilentLogger(),
     bus: { isHealthy: true } as unknown as MessageBus,
+    store: new MemoryObjectStore(),
     lookup: async (host) => {
       const addresses = fakeDns[host];
       if (!addresses) throw new Error('ENOTFOUND');

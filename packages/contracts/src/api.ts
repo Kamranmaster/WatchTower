@@ -151,13 +151,16 @@ export interface MonitorDto {
   nextCheckAt: string;
   lastCheckedAt: string | null;
   hasBaseline: boolean;
+  /** Items found on the page at the last processed check. */
+  itemCount: number | null;
+  lastChangeAt: string | null;
   consecutiveFailures: number;
   lastError: string | null;
   createdAt: string;
   updatedAt: string;
 }
 
-export type CheckRunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'dead';
+export type CheckRunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'skipped' | 'dead';
 
 export interface CheckRunDto {
   id: string;
@@ -169,7 +172,27 @@ export interface CheckRunDto {
   completedAt: string | null;
   durationMs: number | null;
   error: string | null;
+  /** What change detection concluded for this check, once processed. */
+  outcome: 'baseline' | 'unchanged' | 'changed' | 'incomplete' | 'rebaselined' | 'stale' | null;
+  changeCount: number | null;
   createdAt: string;
+}
+
+export type ChangeEventType = 'new_item' | 'item_changed' | 'item_removed' | 'page_changed';
+
+export interface ChangeEventDto {
+  id: string;
+  monitorId: string;
+  monitorName?: string;
+  eventType: ChangeEventType;
+  title: string;
+  description: string | null;
+  sourceUrl: string | null;
+  changedFields: string[];
+  /** For updates: the previous title/fields, to show "was …". */
+  previous: { title: string; fields: Record<string, string> } | null;
+  fields: Record<string, string>;
+  detectedAt: string;
 }
 
 /** Dev-only scheduler overview (GET /api/dev/scheduler). */
@@ -177,7 +200,7 @@ export interface SchedulerStatusDto {
   instances: { id: string; partitions: number; lastSeenAt: string; startedAt: string }[];
   unownedPartitions: number;
   outbox: { pending: number; published: number; failed: number; oldestPendingAt: string | null };
-  checkRuns: { queued: number; running: number; succeeded: number; failed: number; dead: number };
+  checkRuns: { queued: number; running: number; succeeded: number; failed: number; skipped: number; dead: number };
   dueMonitors: number;
 }
 

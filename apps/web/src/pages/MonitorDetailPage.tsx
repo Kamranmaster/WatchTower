@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react';
 import type { CheckRunDto } from '@monitorly/contracts';
 import { Link, useNavigate, useParams } from 'react-router';
-import { useDeleteMonitor, useMonitor, useMonitorRuns, useSetMonitorPaused } from '../hooks/useMonitors';
+import { useDeleteMonitor, useMonitor, useMonitorEvents, useMonitorRuns, useSetMonitorPaused } from '../hooks/useMonitors';
+import { ChangeList } from '../components/ChangeList';
 import { FETCH_MODE_LABELS, MONITOR_TYPE_LABELS, describeRules, formatInterval, relativeTime } from '../lib/format';
 import { Alert, Button, ButtonLink, Card, Chip, PageLoading, StatusBadge } from '../components/ui';
 
@@ -105,16 +106,9 @@ export function MonitorDetailPage() {
         )}
       </Card>
 
-      <CheckHistory monitorId={monitor.id} />
+      <RecentChanges monitorId={monitor.id} hasBaseline={monitor.hasBaseline} itemCount={monitor.itemCount} />
 
-      <Card>
-        <h2 className="text-base font-semibold">Recent changes</h2>
-        <p className="mt-2 text-sm text-slate-500">
-          {monitor.hasBaseline
-            ? 'No matching changes detected yet.'
-            : 'Nothing yet. The first check saves a snapshot of the page as a baseline — you’ll be alerted about changes after that.'}
-        </p>
-      </Card>
+      <CheckHistory monitorId={monitor.id} />
     </div>
   );
 }
@@ -147,6 +141,7 @@ const RUN_STATUS: Record<CheckRunDto['status'], { label: string; className: stri
   running: { label: 'Checking…', className: 'bg-indigo-50 text-indigo-700' },
   succeeded: { label: 'Done', className: 'bg-emerald-50 text-emerald-700' },
   failed: { label: 'Failed', className: 'bg-amber-50 text-amber-800' },
+  skipped: { label: 'Skipped', className: 'bg-slate-100 text-slate-500' },
   dead: { label: 'Gave up', className: 'bg-red-50 text-red-700' },
 };
 
@@ -171,12 +166,59 @@ function CheckHistory({ monitorId }: { monitorId: string }) {
                   {relativeTime(run.scheduledFor)}
                 </span>
                 <span className={`rounded-md px-2 py-0.5 text-xs font-medium ${status.className}`}>{status.label}</span>
-                {run.durationMs != null && <span className="text-slate-500">{(run.durationMs / 1000).toFixed(1)} s</span>}
+                {run.outcome && <span className="text-slate-600">{outcomeText(run)}</span>}
+                {run.durationMs != null && <span className="text-slate-400">{(run.durationMs / 1000).toFixed(1)} s</span>}
                 {run.error && <span className="truncate text-red-600">{run.error}</span>}
               </li>
             );
           })}
         </ul>
+      )}
+    </Card>
+  );
+}
+
+function outcomeText(run: CheckRunDto): string {
+  switch (run.outcome) {
+    case 'baseline':
+      return 'Baseline saved';
+    case 'unchanged':
+      return 'No changes';
+    case 'changed':
+      return run.changeCount ? `${run.changeCount} change${run.changeCount === 1 ? '' : 's'}` : 'Changes already reported';
+    case 'incomplete':
+      return 'Page looked incomplete; not compared';
+    case 'rebaselined':
+      return 'New page layout accepted';
+    case 'stale':
+      return 'Superseded by a newer check';
+    default:
+      return '';
+  }
+}
+
+function RecentChanges({ monitorId, hasBaseline, itemCount }: { monitorId: string; hasBaseline: boolean; itemCount: number | null }) {
+  const events = useMonitorEvents(monitorId);
+  return (
+    <Card>
+      <div className="flex items-baseline justify-between gap-4">
+        <h2 className="text-base font-semibold">Recent changes</h2>
+        {itemCount != null && <span className="text-sm text-slate-500">{itemCount} items on the page at the last check</span>}
+      </div>
+      {events.isPending ? (
+        <p className="mt-2 text-sm text-slate-500">Loading…</p>
+      ) : events.isError ? (
+        <p className="mt-2 text-sm text-red-600">{events.error.message}</p>
+      ) : events.data.length > 0 ? (
+        <div className="mt-2">
+          <ChangeList events={events.data} />
+        </div>
+      ) : (
+        <p className="mt-2 text-sm text-slate-500">
+          {hasBaseline
+            ? 'No changes detected yet. We compare every check with the last one and list new, updated and removed items here.'
+            : 'Nothing yet. The first check saves the page as a baseline — changes are detected from the next check on.'}
+        </p>
       )}
     </Card>
   );

@@ -1,5 +1,5 @@
 import mongoose, { Schema, type InferSchemaType, type HydratedDocument } from 'mongoose';
-import { FETCH_MODES, MONITOR_STATUSES, MONITOR_TYPES } from '@monitorly/contracts';
+import { FETCH_MODES, MONITOR_STATUSES, MONITOR_TYPES, PROCESSING_OUTCOMES } from '@monitorly/contracts';
 
 export { FETCH_MODES, MONITOR_STATUSES, MONITOR_TYPES };
 
@@ -49,7 +49,16 @@ const monitorSchema = new Schema(
     partitionId: { type: Number, required: true },
     nextCheckAt: { type: Date, required: true },
     lastCheckedAt: Date,
+    /** The baseline: the latest processed snapshot that new checks are compared with. */
     lastSnapshotId: { type: ObjectId, ref: 'Snapshot' },
+    /** capturedAt of the baseline: results older than this are stale and never replace it. */
+    baselineCapturedAt: Date,
+    /** Set when the URL or page type changes: checks scheduled before this are stale. */
+    baselineResetAt: Date,
+    baselineItemCount: Number,
+    /** Checks in a row whose extraction looked incomplete (after 3 the new layout is accepted). */
+    incompleteStreak: { type: Number, default: 0 },
+    lastChangeAt: Date,
     consecutiveFailures: { type: Number, default: 0 },
     lastError: String,
   },
@@ -62,7 +71,9 @@ monitorSchema.index({ status: 1, partitionId: 1, nextCheckAt: 1 });
 monitorSchema.index({ userId: 1, createdAt: -1 });
 
 // ---------------------------------------------------------------- CheckRun
-export const CHECK_RUN_STATUSES = ['queued', 'running', 'succeeded', 'failed', 'dead'] as const;
+/** skipped = not run because the monitor changed (e.g. new URL) after it was scheduled. */
+export const CHECK_RUN_STATUSES = ['queued', 'running', 'succeeded', 'failed', 'skipped', 'dead'] as const;
+export const TERMINAL_CHECK_RUN_STATUSES = ['succeeded', 'failed', 'skipped', 'dead'] as const;
 
 const checkRunSchema = new Schema(
   {
@@ -73,7 +84,12 @@ const checkRunSchema = new Schema(
     status: { type: String, enum: CHECK_RUN_STATUSES, default: 'queued' },
     attempts: { type: Number, default: 0 },
     fetchModeUsed: { type: String, enum: ['http', 'browser'] },
+    /** Set when the HTTP worker handed this run to the browser worker ("auto" mode fallback). */
+    escalatedToBrowser: { type: Boolean, default: false },
     snapshotId: { type: ObjectId, ref: 'Snapshot' },
+    /** What processing concluded (Phase 6). */
+    outcome: { type: String, enum: [...PROCESSING_OUTCOMES, 'stale'] },
+    changeCount: Number,
     startedAt: Date,
     completedAt: Date,
     durationMs: Number,
@@ -96,7 +112,19 @@ const snapshotSchema = new Schema(
     extractedObjectKey: String,
     itemCount: { type: Number, default: 0 },
     fetchMode: { type: String, enum: ['http', 'browser'], required: true },
+    contentType: String,
+    httpStatus: Number,
+    /** Where the page ended up after redirects. */
+    finalUrl: String,
+    /** Size of the decoded page in bytes (before compression). */
+    byteSize: Number,
     capturedAt: { type: Date, required: true },
+    /** Set by the processing worker; present ⇒ already processed (idempotency). */
+    processedAt: Date,
+    processingStatus: { type: String, enum: [...PROCESSING_OUTCOMES, 'stale'] },
+    /** Hash of the extracted, normalized content (unlike contentHash, stable across loads). */
+    normalizedHash: String,
+    extractionStrategy: String,
   },
   { timestamps: false },
 );
@@ -111,11 +139,18 @@ const eventSchema = new Schema(
     monitorId: { type: ObjectId, ref: 'Monitor', required: true },
     userId: { type: ObjectId, ref: 'User', required: true },
     checkRunId: { type: ObjectId, ref: 'CheckRun', required: true },
+    snapshotId: { type: ObjectId, ref: 'Snapshot' },
     eventType: { type: String, enum: EVENT_TYPES, required: true },
     title: { type: String, required: true, maxlength: 500 },
     description: { type: String, maxlength: 5000 },
     sourceUrl: String,
+    /** The item's identity on the page (canonical link or title). */
+    itemKey: String,
     item: Mixed,
+    /** For updates and removals: the version before. */
+    previous: Mixed,
+    /** For updates: which parts changed ("title", "location", "price"…). */
+    changedFields: [String],
     ai: {
       status: { type: String, enum: ['pending', 'done', 'skipped', 'failed'], default: 'skipped' },
       summary: String,

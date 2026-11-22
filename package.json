@@ -11,14 +11,17 @@
     "node": ">=22"
   },
   "scripts": {
-    "infra:up": "docker compose up -d --wait",
+    "infra:up": "docker compose up -d --wait && docker compose run --rm seaweedfs-init",
     "infra:down": "docker compose down",
     "infra:reset": "docker compose down -v",
     "infra:logs": "docker compose logs -f",
+    "setup:browser": "npm run install-browser -w @monitorly/browser-worker",
     "dev": "node scripts/dev.mjs",
     "dev:api": "npm run dev -w @monitorly/api",
     "dev:scheduler": "npm run dev -w @monitorly/scheduler",
     "dev:fetch-worker": "npm run dev -w @monitorly/fetch-worker",
+    "dev:browser-worker": "npm run dev -w @monitorly/browser-worker",
+    "dev:processing-worker": "npm run dev -w @monitorly/processing-worker",
     "dev:web": "npm run dev -w @monitorly/web",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",

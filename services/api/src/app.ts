@@ -6,12 +6,14 @@ import { pinoHttp } from 'pino-http';
 import type { InstructionInterpreter } from '@monitorly/ai';
 import type { Logger } from '@monitorly/logger';
 import type { MessageBus } from '@monitorly/messaging';
+import type { ObjectStore } from '@monitorly/storage';
 import type { LookupFn } from '@monitorly/url-safety';
 import type { Env } from './env';
 import { errorHandler, notFound } from './middleware/errors';
 import { sameOriginOnly } from './middleware/security';
 import { authRouter } from './routes/auth';
 import { devRouter } from './routes/dev';
+import { eventsRouter } from './routes/events';
 import { healthRouter } from './routes/health';
 import { monitorsRouter } from './routes/monitors';
 
@@ -19,6 +21,8 @@ export interface AppDeps {
   env: Env;
   logger: Logger;
   bus: MessageBus;
+  /** Snapshot storage (deleted together with a monitor). */
+  store: ObjectStore;
   /** DNS resolver override for URL safety checks (tests). */
   lookup?: LookupFn;
   /** Natural language → rules. Undefined when no OpenAI key is configured (users fill filters manually). */
@@ -54,6 +58,7 @@ export function createApp(deps: AppDeps): Express {
   app.use('/api', sameOriginOnly(env.WEB_ORIGIN));
   app.use('/api/auth', authRouter(deps));
   app.use('/api/monitors', monitorsRouter(deps));
+  app.use('/api/events', eventsRouter(deps));
   if (env.NODE_ENV !== 'production') {
     app.use('/api/dev', devRouter(deps));
   }

@@ -6,14 +6,18 @@
   "scripts": {
     "dev": "tsx watch --clear-screen=false src/index.ts",
     "start": "tsx src/index.ts",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
   },
   "dependencies": {
     "@monitorly/config": "*",
     "@monitorly/contracts": "*",
     "@monitorly/database": "*",
+    "@monitorly/fetching": "*",
     "@monitorly/logger": "*",
     "@monitorly/messaging": "*",
-    "@monitorly/runtime": "*"
+    "@monitorly/outbox": "*",
+    "@monitorly/runtime": "*",
+    "@monitorly/storage": "*"
   }
 }

@@ -1,7 +1,8 @@
 import { Link } from 'react-router';
 import type { MonitorDto } from '@monitorly/contracts';
 import { useMe } from '../hooks/useAuth';
-import { useMonitors, useSetMonitorPaused } from '../hooks/useMonitors';
+import { useMonitors, useRecentEvents, useSetMonitorPaused } from '../hooks/useMonitors';
+import { ChangeList } from '../components/ChangeList';
 import { formatInterval, hostOf, relativeTime } from '../lib/format';
 import { Alert, Button, ButtonLink, Card, PageLoading, StatusBadge } from '../components/ui';
 
@@ -34,6 +35,8 @@ export function DashboardPage() {
         <Stat label="Failing" value={count('error')} tone={count('error') > 0 ? 'bad' : undefined} />
         <Stat label="Next check" value={nextUp ? relativeTime(nextUp.nextCheckAt) : '—'} small />
       </div>
+
+      {list.length > 0 && <RecentChangesCard />}
 
       {list.length === 0 ? (
         <EmptyState />
@@ -79,6 +82,7 @@ function MonitorRow({ monitor }: { monitor: MonitorDto }) {
       <div className="hidden text-right text-sm text-slate-500 md:block">
         <p>{formatInterval(monitor.checkIntervalMinutes)}</p>
         <p>{paused ? 'Paused' : monitor.lastCheckedAt ? `Checked ${relativeTime(monitor.lastCheckedAt)}` : 'Not checked yet'}</p>
+        {monitor.lastChangeAt && <p className="text-emerald-700">Changed {relativeTime(monitor.lastChangeAt)}</p>}
       </div>
       <Button
         variant="secondary"
@@ -101,6 +105,23 @@ function EmptyState() {
       <ButtonLink to="/monitors/new" className="mt-6">
         Create your first monitor
       </ButtonLink>
+    </Card>
+  );
+}
+
+function RecentChangesCard() {
+  const events = useRecentEvents(8);
+  if (events.isPending || events.isError) return null;
+  return (
+    <Card>
+      <h2 className="text-base font-semibold">Recent changes</h2>
+      {events.data.length === 0 ? (
+        <p className="mt-2 text-sm text-slate-500">No changes detected yet. New, updated and removed items will show up here.</p>
+      ) : (
+        <div className="mt-2">
+          <ChangeList events={events.data} showMonitor />
+        </div>
+      )}
     </Card>
   );
 }

@@ -1,5 +1,6 @@
 import { aiEnvFields } from '@monitorly/ai';
 import { baseEnvSchema, z } from '@monitorly/config';
+import { storageEnvFields } from '@monitorly/storage';
 
 /** Schema only — importing this file has no side effects (tests build their own env from it). */
 export const apiEnvSchema = baseEnvSchema.extend({
@@ -16,6 +17,7 @@ export const apiEnvSchema = baseEnvSchema.extend({
   /** AI interpretations allowed per user per hour (each one costs an OpenAI call). */
   AI_RATE_LIMIT: z.coerce.number().int().min(1).default(30),
   ...aiEnvFields,
+  ...storageEnvFields,
 });
 
 export type Env = z.output<typeof apiEnvSchema>;

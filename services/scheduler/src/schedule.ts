@@ -1,7 +1,8 @@
-import { ROUTES, fetchJobSchema, type FetchMode } from '@monitorly/contracts';
-import { CheckRun, Monitor, OutboxMessage, isDuplicateKeyError, mongoose } from '@monitorly/database';
+import { ROUTES, type FetchMode } from '@monitorly/contracts';
+import { CheckRun, Monitor, isDuplicateKeyError, mongoose } from '@monitorly/database';
 import type { Logger } from '@monitorly/logger';
 import { createEnvelope } from '@monitorly/messaging';
+import { enqueueOutbox } from '@monitorly/outbox';
 
 const MINUTE = 60_000;
 
@@ -75,19 +76,18 @@ export async function scheduleMonitor(monitorId: string, dueAt: Date, now: Date)
 
       const fetchMode = fetchModeFor(monitor);
       const route = fetchMode === 'browser' ? ROUTES.fetchBrowser : ROUTES.fetchHttp;
-      // Validate now: a bad message must fail the transaction, not sit in the outbox.
-      const payload = fetchJobSchema.parse({
-        ...createEnvelope(),
-        checkRunId: run!.id,
-        monitorId: String(monitor._id),
-        userId: String(monitor.userId),
-        url: monitor.url,
-        fetchMode,
-        scheduledAt: scheduledFor.toISOString(),
-      });
-      await OutboxMessage.create(
-        [{ messageId: payload.messageId, exchange: route.exchange, routingKey: route.routingKey, payload }],
-        { session },
+      await enqueueOutbox(
+        route,
+        {
+          ...createEnvelope(),
+          checkRunId: run!.id,
+          monitorId: String(monitor._id),
+          userId: String(monitor.userId),
+          url: monitor.url,
+          fetchMode,
+          scheduledAt: scheduledFor.toISOString(),
+        },
+        session,
       );
       return 'scheduled';
     });

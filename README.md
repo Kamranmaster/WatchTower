@@ -10,19 +10,25 @@ changes, applies your rules and alerts you in-app and by email.
 apps/web                 React + Vite + TanStack Query + Tailwind
 services/api             Express REST API (+ Socket.IO from Phase 8)
 services/scheduler       Finds due monitors → CheckRun + outbox (one transaction) → RabbitMQ
-services/fetch-worker    HTTP fetching (consumes fetch.http)
+services/fetch-worker    HTTP fetching (consumes fetch.http); "auto" hands JS-only pages to the browser worker
+services/browser-worker  Playwright/Chromium rendering (consumes fetch.browser) behind an SSRF-safe proxy
+services/processing-worker  Extraction + change detection (consumes content.process, publishes content.processed)
 packages/config          .env loading + Zod validation
 packages/contracts       RabbitMQ topology + message schemas (single source of truth)
 packages/database        Mongoose connection, models, indexes
 packages/messaging       RabbitMQ: confirms, manual acks, prefetch, retry tiers, DLQs
 packages/ai              AI (OpenAI / Gemini / Ollama): description → validated filters
-packages/url-safety      SSRF protection: blocks private/internal URLs (checked on save and before every fetch)
+packages/url-safety      SSRF protection: URL rules + connect-time DNS check (on save, every fetch, every redirect)
+packages/fetching        Safe HTTP fetch (Axios), content check (Cheerio), robots.txt, shared worker steps
+packages/extraction      Page → normalized items with stable fingerprints; item-level diff
+packages/storage         S3-compatible object storage for page snapshots (gzip)
+packages/outbox          Transactional outbox: enqueue in a transaction, relay to RabbitMQ
 packages/logger          Pino structured logging
 packages/runtime         Graceful shutdown / crash handling for every service
 infrastructure/          Config mounted into infra containers
 ```
 
-Services still to come: `browser-worker`, `processing-worker`, `ai-worker`, `notification-worker`.
+Services still to come: `ai-worker`, `notification-worker`.
 
 ## Prerequisites
 
@@ -34,14 +40,15 @@ Services still to come: `browser-worker`, `processing-worker`, `ai-worker`, `not
 ```bash
 npm install
 cp .env.example .env        # then set JWT_SECRET (generator command is in the file)
-npm run infra:up            # MongoDB, RabbitMQ, Redis, SeaweedFS (S3), Mailpit
+npm run infra:up            # MongoDB, RabbitMQ, Redis, SeaweedFS (S3), Mailpit; creates the bucket
+npm run setup:browser       # downloads Chromium for the browser worker (once)
 ```
 
 ## Daily development
 
 ```bash
 npm run infra:up    # if not already running
-npm run dev         # api + scheduler + fetch-worker + web, with hot reload
+npm run dev         # api + scheduler + fetch/browser/processing workers + web, with hot reload
 npm run smoke       # in another terminal: end-to-end Milestone 1 check
 ```
 
@@ -77,6 +84,8 @@ another user's monitor ID returns 404, exactly like a non-existent one.
 | GET | /api/monitors/:id | Monitor details |
 | PATCH | /api/monitors/:id | Update (only the fields sent) |
 | GET | /api/monitors/:id/runs | Recent check runs (`?limit=`, max 100) |
+| GET | /api/monitors/:id/events | Changes detected on this monitor (`?limit=`, max 200) |
+| GET | /api/events | Recent changes across all my monitors (`?limit=`, max 100) |
 | POST | /api/monitors/:id/pause | Pause |
 | POST | /api/monitors/:id/resume | Resume (clears errors, checks immediately) |
 | DELETE | /api/monitors/:id | Delete monitor and its history |
@@ -137,6 +146,66 @@ the cadence from now rather than firing a burst of catch-up checks.
 Run more instances locally with `npm run dev:scheduler` in extra terminals; the System page
 (`/system`) shows each instance's partitions, the outbox backlog and queued runs.
 
+## Fetching pages
+
+A scheduled job goes to `fetch.http` (or straight to `fetch.browser` for monitors set to
+"Full browser", or "auto" monitors that needed the browser last time).
+
+- **HTTP worker**: checks `robots.txt`, fetches with Axios, and stores the page gzip-compressed
+  at `snapshots/<monitorId>/<checkRunId>.html.gz`. It then records the `Snapshot`, completes the
+  run and writes a `fetch.completed` message (a *reference* to the stored page, never the HTML)
+  to the outbox, all in one transaction.
+- In **auto** mode, if the page has almost no text without JavaScript (checked with Cheerio), or
+  the site answers 401/403/406, the same run is handed to the **browser worker**, which renders
+  it in headless Chromium. The method that worked is remembered for the next check.
+- Failures: temporary ones (timeouts, 5xx, 429) retry with backoff (5 s → 30 s → 2 min).
+  Permanent ones (404, blocked address, robots.txt, PDF…) fail the run at once. After
+  `MONITOR_ERROR_THRESHOLD` (5) failed checks in a row the monitor is set to **error** and is no
+  longer scheduled until the user resumes it.
+
+**SSRF protection** (users can submit any URL):
+- Only http/https on ports 80/443/8080/8443; no credentials in URLs; no internal hostnames.
+- DNS is checked **at connect time** by a custom lookup, so the address actually connected to is
+  the one that was approved (no DNS rebinding). Every redirect is followed manually and re-checked.
+- Environment proxies are ignored; responses are capped at 5 MB *after decompression* (gzip
+  bombs) with a total deadline.
+- The browser can't be trusted to stay on the page's host (redirects, scripts, `fetch()`,
+  iframes), so **all** Chromium traffic, including loopback, goes through a local proxy that applies
+  the same checks. The proxy requires a per-process secret, every job gets a fresh browser
+  context (no cookies or credentials), service workers and downloads are blocked.
+- For production, also run the workers on a network that can only reach the public internet.
+
+## Change detection
+
+The processing worker consumes `fetch.completed` (queue `content.process`):
+
+1. **Extract** items from the stored page (`packages/extraction`). Noise is removed first: scripts,
+   navigation, header/footer, cookie banners, hidden elements. Then, in order of reliability:
+   schema.org JSON-LD (`JobPosting`, `Product`), repeated page structure (lists, cards, table
+   rows), content links. "Any change" monitors compare text blocks instead.
+2. **Normalize**: Unicode NFKC, whitespace, quotes/dashes; links made absolute with tracking
+   parameters removed. Volatile text ("Posted 3 days ago", clock times, view/applicant counts)
+   is left out of hashes.
+3. **Fingerprint**: each item's identity is its canonical link (or structured-data id, or title when
+   there is no unique link); its content hash covers title, text and fields. The page hash covers
+   all items, so equal hashes mean nothing changed. The structure that held the records is saved
+   as a template and reused, so lists that shrink to one or two entries are still found.
+4. **Compare** with the baseline: added → `new_item`, same identity with a different hash →
+   `item_changed` (with which fields changed), gone → `item_removed`. Links whose query string
+   changes on every load (session tokens) are matched by title + path. "Any change" monitors get
+   one `page_changed` event.
+5. **Guard rails**: the first check only saves a baseline. If most items vanish at once (≥5 items
+   dropping below half), it's treated as a broken load: nothing is reported and the baseline is kept;
+   after 3 such checks in a row the new layout is accepted quietly.
+6. **Commit** in one transaction: events (unique `(monitorId, fingerprint)`, so duplicates are
+   impossible), the snapshot marked processed, the baseline advanced, and `content.processed` in the
+   outbox for the rules engine (queue `rules.evaluate`, Phase 7).
+
+Ordering: a result older than the current baseline (or scheduled before the URL/page type changed)
+is marked stale and never compared. The transaction re-checks that the baseline is still the one it
+compared against; if another check moved it meanwhile, it starts over. Every snapshot and its
+extracted items stay in object storage (`<checkRunId>.html.gz`, `<checkRunId>.items.json.gz`).
+
 ## Messaging model
 
 Every work queue `<q>` has retry tiers `<q>.retry.5000|30000|120000` and a dead-letter
@@ -154,8 +223,8 @@ the redeclare (`PRECONDITION_FAILED`): delete the queue in the management UI or 
 - [x] Phase 2 — Auth + monitor CRUD + dashboard
 - [x] Phase 3 — Natural-language → validated rules (AI: Gemini / OpenAI / Ollama)
 - [x] Phase 4 — Scheduler + CheckRuns + outbox + partition leases
-- [ ] Phase 5 — HTTP / Playwright fetch workers, SSRF protection, snapshots
-- [ ] Phase 6 — Extraction + change detection
+- [x] Phase 5 — HTTP / Playwright fetch workers, SSRF protection, snapshots
+- [x] Phase 6 — Extraction + change detection
 - [ ] Phase 7 — Rules engine + AI enrichment
 - [ ] Phase 8 — Notifications (Socket.IO + email)
 - [ ] Phase 9 — Frontend pages

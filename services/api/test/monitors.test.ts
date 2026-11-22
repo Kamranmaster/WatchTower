@@ -2,6 +2,7 @@ import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 import { CheckRun, Monitor } from '@monitorly/database';
 import { buildApp, signedInAgent, useTestDatabase } from './helpers';
+import { MemoryObjectStore, rawSnapshotKey } from '@monitorly/storage';
 
 useTestDatabase();
 const app = buildApp();
@@ -174,14 +175,19 @@ describe('pause, resume and delete', () => {
     expect(Date.parse(resumed.body.monitor.nextCheckAt)).toBeLessThanOrEqual(Date.now());
   });
 
-  it('delete removes the monitor and its history', async () => {
-    const { agent, user } = await signedInAgent(app);
+  it('delete removes the monitor, its history and its stored snapshots', async () => {
+    const store = new MemoryObjectStore();
+    const appWithStore = buildApp({ store });
+    const { agent, user } = await signedInAgent(appWithStore);
     const { body } = await agent.post('/api/monitors').send(validMonitor);
     const id = body.monitor.id;
     await CheckRun.create({ monitorId: id, userId: user.id, scheduledFor: new Date() });
+    await store.put(rawSnapshotKey(id, 'run1'), Buffer.from('<html>'));
+    await store.put(rawSnapshotKey('someone-else', 'run1'), Buffer.from('<html>'));
 
     await agent.delete(`/api/monitors/${id}`).expect(204);
     await agent.get(`/api/monitors/${id}`).expect(404);
     expect(await CheckRun.countDocuments({ monitorId: id })).toBe(0);
+    expect([...store.objects.keys()]).toEqual([rawSnapshotKey('someone-else', 'run1')]);
   });
 });

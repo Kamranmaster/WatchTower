@@ -9,12 +9,13 @@ import {
   type InterpretInstructionResponse,
 } from '@monitorly/contracts';
 import { CheckRun, Event, Monitor, Notification, Snapshot, mongoose, partitionFor } from '@monitorly/database';
+import { monitorPrefix } from '@monitorly/storage';
 import { UnsafeUrlError, assertSafeUrl } from '@monitorly/url-safety';
 import type { AppDeps } from '../app';
 import { currentUserId, requireAuth } from '../middleware/auth';
 import { HttpError } from '../middleware/errors';
 import { aiRateLimit } from '../middleware/security';
-import { serializeCheckRun, serializeMonitor } from '../serializers';
+import { serializeCheckRun, serializeEvent, serializeMonitor } from '../serializers';
 
 const MINUTE = 60_000;
 
@@ -145,6 +146,14 @@ export function monitorsRouter(deps: AppDeps): Router {
     res.json({ runs: runs.map(serializeCheckRun) });
   });
 
+  /** Changes detected on this monitor's page, newest first. */
+  router.get('/:id/events', async (req, res) => {
+    const monitor = await findOwned(req, currentUserId(req));
+    const limit = z.coerce.number().int().min(1).max(200).catch(50).parse(req.query.limit);
+    const events = await Event.find({ monitorId: monitor._id }).sort({ detectedAt: -1, _id: -1 }).limit(limit);
+    res.json({ events: events.map((e) => serializeEvent(e)) });
+  });
+
   router.patch('/:id', async (req, res) => {
     const userId = currentUserId(req);
     const input = updateMonitorSchema.parse(req.body);
@@ -155,15 +164,23 @@ export function monitorsRouter(deps: AppDeps): Router {
     if (fields.name === '') monitor.set('name', new URL(monitor.url).hostname);
 
     let urlChanged = false;
+    const typeChanged = fields.monitorType !== undefined && monitor.isModified('monitorType');
     if (rawUrl !== undefined) {
       const url = await safeUrl(rawUrl);
       if (url !== monitor.url) {
         urlChanged = true;
         monitor.url = url;
-        // A different page: the old baseline is meaningless, start fresh.
-        monitor.set('lastSnapshotId', undefined);
         monitor.set('resolvedFetchMode', undefined);
       }
+    }
+    if (urlChanged || typeChanged) {
+      // A different page, or items read differently: the old baseline can't be compared with.
+      // Checks scheduled before now are ignored by change detection (baselineResetAt).
+      monitor.set('lastSnapshotId', undefined);
+      monitor.set('baselineCapturedAt', undefined);
+      monitor.set('baselineItemCount', undefined);
+      monitor.set('incompleteStreak', 0);
+      monitor.set('baselineResetAt', new Date());
     }
 
     if (monitor.status === 'active') {
@@ -213,7 +230,14 @@ export function monitorsRouter(deps: AppDeps): Router {
       Event.deleteMany({ monitorId }),
       Notification.deleteMany({ monitorId }),
     ]);
-    // TODO(Phase 5): also delete this monitor's snapshot objects from object storage.
+    // Stored page snapshots. If storage is briefly unavailable the monitor is still deleted;
+    // the objects are orphaned under a prefix nobody references (log so they can be cleaned up).
+    try {
+      const objects = await deps.store.deletePrefix(monitorPrefix(String(monitorId)));
+      logger.debug({ monitorId: monitor.id, objects }, 'Deleted snapshot objects');
+    } catch (err) {
+      logger.warn({ err, monitorId: monitor.id }, 'Could not delete snapshot objects');
+    }
 
     logger.info({ userId, monitorId: monitor.id }, 'Monitor deleted');
     res.status(204).end();

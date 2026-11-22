@@ -33,6 +33,7 @@ export const fetchCompletedSchema = z.object({
   checkRunId: objectIdString,
   monitorId: objectIdString,
   userId: objectIdString,
+  snapshotId: objectIdString,
   fetchMode: fetchModeSchema,
   objectStorageKey: z.string().min(1),
   contentHash: z.string().min(1),
@@ -41,6 +42,34 @@ export const fetchCompletedSchema = z.object({
   fetchedAt: z.iso.datetime(),
 });
 export type FetchCompleted = z.infer<typeof fetchCompletedSchema>;
+
+export const PROCESSING_OUTCOMES = ['baseline', 'unchanged', 'changed', 'incomplete', 'rebaselined'] as const;
+export type ProcessingOutcome = (typeof PROCESSING_OUTCOMES)[number];
+
+/**
+ * Processing worker → rules engine (Phase 7): the result of comparing one check with the
+ * baseline. Event details live in MongoDB; only their ids travel here.
+ */
+export const contentProcessedSchema = z.object({
+  ...envelope,
+  checkRunId: objectIdString,
+  monitorId: objectIdString,
+  userId: objectIdString,
+  snapshotId: objectIdString,
+  outcome: z.enum(PROCESSING_OUTCOMES),
+  eventIds: z.array(objectIdString).max(200),
+  counts: z.object({
+    added: z.number().int().min(0),
+    updated: z.number().int().min(0),
+    removed: z.number().int().min(0),
+    pageChanged: z.boolean(),
+  }),
+  /** More changes were found than events created (capped per check). */
+  truncated: z.boolean(),
+  itemCount: z.number().int().min(0),
+  processedAt: z.iso.datetime(),
+});
+export type ContentProcessed = z.infer<typeof contentProcessedSchema>;
 
 /** Processing worker → AI worker: enrich matched events. */
 export const aiAnalyzeJobSchema = z.object({
